@@ -7,8 +7,9 @@
     "apiKey": {
       "type": "string",
       "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
-      "sensitive": true
+      "description": "Your TypeSafe API key for Jev. Stored in secure storage (the macOS Keychain), not settings.json.",
+      "sensitive": true,
+      "required": true
     },
     "keepThreshold": {
       "type": "number",

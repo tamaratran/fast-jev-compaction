@@ -29,10 +29,21 @@ hooks surface before installing or loading it:
 
 ```sh
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
-export TYPESAFE_API_KEY="<your TypeSafe key>"
 
 claude plugin marketplace add tamaratran/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
+```
+
+`apiKey` is a required, sensitive option, kept in secure storage rather than
+settings.json. `claude plugin install` does not prompt for it; it reports the
+option as not yet set. Set it in the same command, or afterwards in Claude Code:
+
+```sh
+claude plugin install fast-jev-compaction@fast-jev-compaction --config apiKey=<your TypeSafe key>
+```
+
+```
+/plugin configure fast-jev-compaction
 ```
 
 For local development:
@@ -57,9 +68,10 @@ The plugin declares these `userConfig` values in
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
 
-The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
-through `TYPESAFE_API_KEY`. The environment variable is the recommended
-development setup.
+The TypeSafe key is the required, sensitive `apiKey` plugin option. When the
+option is empty, the mod falls back to `TYPESAFE_API_KEY` from the environment
+or the `env` block of `~/.claude/settings.json`, which is the simplest setup
+for `--plugin-dir` development, where there is no install prompt.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
