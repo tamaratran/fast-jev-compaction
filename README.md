@@ -162,4 +162,7 @@ to be screen recorded.
 demo/JevDemo/build.sh   # builds demo/JevDemo/build/JevDemo.app and launches it
 ```
 
-Press space in the app to replay from the start.
+Press space in the app to replay from the start. The large token counter uses
+illustrative values (156,000 → 62,000), not tokenizer measurements.
+Each line reveals a scripted removal probability, `p(drop)`, beside its
+KEEP/DROP verdict as the scan passes.
