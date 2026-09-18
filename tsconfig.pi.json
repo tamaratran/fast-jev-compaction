@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "types": ["node"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@earendil-works/pi-coding-agent": ["types/pi.d.ts"]
+    }
+  },
+  "include": ["pi", "types"],
+  "exclude": ["pi/e2e.ts"]
+}

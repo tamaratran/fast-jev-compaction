@@ -76,9 +76,14 @@ describe('options', () => {
     expect(resolveOptions()).toMatchObject({
       keepThreshold: 0.5,
       preserveRecentMessages: 6,
-      maxStateTokens: 25_000,
-      maxRequestTokens: 30_000,
+      maxStateTokens: Number.POSITIVE_INFINITY,
+      maxRequestTokens: Number.POSITIVE_INFINITY,
       truncateHeadChars: 300,
+    });
+    // Explicit finite caps still honored (opt-in ceiling, not default).
+    expect(resolveOptions({ maxStateTokens: 5000, maxRequestTokens: 8000 })).toMatchObject({
+      maxStateTokens: 5000,
+      maxRequestTokens: 8000,
     });
     expect(resolveOptions({
       keepThreshold: Number.NaN,
@@ -223,6 +228,32 @@ describe('state fitting', () => {
   it('throws when the history cannot be fitted', () => {
     const messages = [message('user', 'a'.repeat(2000)), message('assistant', 'b')];
     expect(() => fitState(messages, [], { ...fit, maxStateTokens: 50 })).toThrow(/too large/);
+  });
+
+  it('default path never throws: large histories fit whole (no 25k wall)', () => {
+    // Regression: a hardcoded 25k default turned every long session into
+    // a built-in-summary fallback. Unset caps mean the full state goes.
+    const messages = [
+      message('user', 'x'.repeat(100_000)),
+      message('assistant', 'y'.repeat(100_000)),
+    ];
+    const fitted = fitState(messages, [], {
+      maxStateTokens: Number.POSITIVE_INFINITY,
+      preserveRecentMessages: 0,
+      goal: 'g',
+    });
+    expect(fitted.stage).toBe('full');
+    expect(fitted.tokens).toBeGreaterThan(25_000);
+  });
+
+  it('unlimited request budget batches everything together', () => {
+    const calls = [
+      { id: 't1', tool: 'a', input: {}, callIndex: 0, resultIndex: 1, resultChars: 10, pinned: false },
+      { id: 't2', tool: 'b', input: {}, callIndex: 2, resultIndex: 3, resultChars: 10, pinned: false },
+    ] as never;
+    const batches = batchCalls(calls, 1000, { maxRequestTokens: Number.POSITIVE_INFINITY });
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(2);
   });
 });
 

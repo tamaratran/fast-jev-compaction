@@ -99,9 +99,18 @@ export interface CompactOptions {
   keepThreshold?: number;
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
-  /** Estimated token ceiling for the state. Default 25000. */
+  /**
+   * Estimated token ceiling for the state. UNSET = unlimited: the whole
+   * conversation goes to Jev (Jev takes large states; truncation stages
+   * still run for oversized inputs, just never throw). Set a finite number
+   * only to force a hard ceiling (tests, constrained callers).
+   */
   maxStateTokens?: number;
-  /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
+  /**
+   * Estimated token ceiling for state plus one batch of questions. UNSET =
+   * unlimited: all candidate questions go in as few batches as fit, with
+   * no artificial split. Set a finite number only to force batching.
+   */
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;

@@ -14,12 +14,19 @@ import type {
   ToolUse,
 } from './types.js';
 
+// KEY LESSON: the state/request ceilings default to UNLIMITED (Infinity).
+// A hardcoded 25k cap turned every long session into a built-in-summary
+// fallback — the exact sessions where Jev compaction matters most. Jev
+// takes large states; an explicit finite cap still throws (callers and
+// tests that need a ceiling keep it), but the default path never refuses
+// to ask. Infinity flows through Math.max/finite unchanged and every
+// `tokens <= cap` check passes trivially.
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
   keepThreshold: 0.5,
   preserveRecentMessages: 6,
-  maxStateTokens: 25_000,
-  maxRequestTokens: 30_000,
+  maxStateTokens: Number.POSITIVE_INFINITY,
+  maxRequestTokens: Number.POSITIVE_INFINITY,
   truncateHeadChars: 300,
 };
 

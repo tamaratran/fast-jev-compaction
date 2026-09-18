@@ -2,6 +2,24 @@
   "name": "fast-jev-compaction",
   "version": "0.2.0",
   "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "compaction",
+    "context-compaction",
+    "jev",
+    "typesafe",
+    "claude-code",
+    "claude-code-plugin"
+  ],
+  "homepage": "https://github.com/tamaratran/fast-jev-compaction#readme",
+  "bugs": {
+    "url": "https://github.com/tamaratran/fast-jev-compaction/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tamaratran/fast-jev-compaction.git"
+  },
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -15,21 +33,38 @@
   },
   "files": [
     "dist",
+    "src",
+    "pi",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit && npm run typecheck:hooks",
+    "typecheck": "tsc --noEmit && npm run typecheck:hooks && npm run typecheck:pi",
     "test": "vitest run",
     "demo": "tsx examples/demo.ts",
     "typecheck:hooks": "tsc -p tsconfig.hooks.json",
-    "validate:plugin": "claude plugin validate .claude-plugin/plugin.json"
+    "typecheck:pi": "tsc -p tsconfig.pi.json",
+    "validate:plugin": "claude plugin validate .claude-plugin/plugin.json",
+    "e2e:pi": "tsx pi/e2e.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./pi/index.ts"
+    ]
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   }
 }
