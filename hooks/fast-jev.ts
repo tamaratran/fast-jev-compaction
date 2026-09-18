@@ -9,7 +9,13 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
-import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import {
+  buildJevRequest,
+  KEY_ENV_VARS,
+  MISSING_KEY_MESSAGE,
+  parseJevResponse,
+  resolveEndpoint,
+} from '../src/request.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -22,7 +28,6 @@ import type {
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
-  model: DEFAULT_MODEL,
 };
 
 export type HookFetchInit = {
@@ -44,7 +49,10 @@ export type HookConfig = CompactOptions & {
   apiKey?: string;
   compactAtPercent: number;
   minReductionRatio: number;
-  model: string;
+  /** Jev model name; unset lets the endpoint pick its default. */
+  model?: string;
+  /** Full endpoint URL; unset picks System One or OpenRouter from the key. */
+  baseUrl?: string;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -78,20 +86,25 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       'minReductionRatio',
       HOOK_DEFAULTS.minReductionRatio,
     ),
-    model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
+  const model = optionString(options, 'model');
+  if (model) config.model = model;
+  const baseUrl = optionString(options, 'baseUrl');
+  if (baseUrl) config.baseUrl = baseUrl;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
   return config;
 }
 
+export type JevEndpointParams = { apiKey: string; model?: string; baseUrl?: string };
+
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(fetchFn: HookFetch, endpoint: JevEndpointParams): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest(endpoint, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -167,8 +180,13 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  if (!config.apiKey) throw new Error(MISSING_KEY_MESSAGE);
+  const asker = jevAsker(fetchFn, {
+    apiKey: config.apiKey,
+    model: config.model,
+    baseUrl: config.baseUrl,
+  });
+  const result = await compact(messages, asker, config);
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -232,13 +250,17 @@ async function getApiKey(
   config: HookConfig,
 ): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
+  // Literal names: the hook loader lists the variables a module reads.
+  const fromEnv =
+    (await $.env.get('TYPESAFE_API_KEY')) || (await $.env.get('OPENROUTER_API_KEY'));
   if (fromEnv) return fromEnv;
   const settings = await $.settings.read();
   const env = settings['env'];
   if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
-    if (typeof value === 'string' && value) return value;
+    for (const name of KEY_ENV_VARS) {
+      const value = (env as Record<string, unknown>)[name];
+      if (typeof value === 'string' && value) return value;
+    }
   }
   return undefined;
 }
@@ -262,7 +284,12 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const apiKey = await getApiKey($, configured);
+      const config = { ...configured, apiKey };
+      const endpoint = apiKey
+        ? resolveEndpoint({ apiKey, model: config.model, baseUrl: config.baseUrl })
+        : undefined;
+      if (endpoint) $.ui.log(`jev: ${endpoint.model} via ${endpoint.provider} (${endpoint.url})`);
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
@@ -277,7 +304,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       }
       notify(
         $,
-        `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
+        `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)}; ${endpoint?.model} via ${endpoint?.provider})`,
       );
       return { messages };
     } catch (error) {

@@ -53,14 +53,15 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25 });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', baseUrl: 'http://x/', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
       apiKey: 'k',
       keepThreshold: 0.3,
       maxStateTokens: 1000,
       model: 'jev-x',
+      baseUrl: 'http://x/',
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
@@ -137,6 +138,34 @@ describe('compactSession', () => {
     ]);
     expect(lines.every((line) => line.length <= 60)).toBe(true);
     expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);
+  });
+
+  it('routes an OpenRouter key to the Decisions endpoint and maps the model name', async () => {
+    const seen: { url: string; model: string }[] = [];
+    const fetchFn = async (url: string, init?: { body?: string }) => {
+      const { questions, model } = JSON.parse(init?.body ?? '{}') as { questions: Record<string, unknown>; model: string };
+      seen.push({ url, model });
+      const answers = Object.fromEntries(Object.keys(questions).map((key) => [key, { type: 'noul', noul: 0.9 }]));
+      return { status: 200, ok: true, text: JSON.stringify({ answers }) };
+    };
+    await compactSession(transcript(), { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'sk-or-v1-k' }, fetchFn);
+    await compactSession(
+      transcript(),
+      { ...resolveHookConfig({ preserveRecentMessages: 1, model: 'jev-1.13' }), apiKey: 'sk-or-v1-k' },
+      fetchFn,
+    );
+    await compactSession(
+      transcript(),
+      { ...resolveHookConfig({ preserveRecentMessages: 1, baseUrl: 'http://x/' }), apiKey: 'sk-or-v1-k' },
+      fetchFn,
+    );
+    await compactSession(transcript(), { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'ts-k' }, fetchFn);
+    expect(seen).toEqual([
+      { url: 'https://openrouter.ai/api/alpha/decisions', model: '~typesafe/jev-latest' },
+      { url: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13' },
+      { url: 'http://x/', model: 'jev-latest' },
+      { url: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest' },
+    ]);
   });
 
   it('throws on a missing key and on failed requests so the hook falls back', async () => {

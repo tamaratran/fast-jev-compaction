@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyDecisions,
   batchCalls,
@@ -10,6 +10,8 @@ import {
   estimateTokens,
   fitState,
   JevClient,
+  apiKeyFromEnv,
+  resolveEndpoint,
   parseJevResponse,
   reductionRatio,
   resolveOptions,
@@ -403,6 +405,32 @@ describe('HTTP client', () => {
     });
   });
 
+  it('routes by key and explicit endpoint, mapping model names for OpenRouter', () => {
+    const q = { q: { type: 'noul', instructions: 'x' } } as const;
+    const model = (request: { body: string }) => (JSON.parse(request.body) as { model: string }).model;
+    const openrouter = buildJevRequest({ apiKey: 'sk-or-v1-k' }, 's', q);
+    expect(openrouter.url).toBe('https://openrouter.ai/api/alpha/decisions');
+    expect(openrouter.headers.authorization).toBe('Bearer sk-or-v1-k');
+    expect(model(openrouter)).toBe('~typesafe/jev-latest');
+    expect(model(buildJevRequest({ apiKey: 'sk-or-v1-k', model: 'jev-1.13' }, 's', q))).toBe('typesafe/jev-1.13');
+    expect(model(buildJevRequest({ apiKey: 'sk-or-v1-k', model: 'other/x' }, 's', q))).toBe('other/x');
+    const pinned = buildJevRequest({ apiKey: 'sk-or-v1-k', baseUrl: 'https://api.typesafe.ai/v1/systemone' }, 's', q);
+    expect(pinned.url).toBe('https://api.typesafe.ai/v1/systemone');
+    expect(model(pinned)).toBe('jev-latest');
+    const viaUrl = buildJevRequest({ apiKey: 'k', baseUrl: 'https://openrouter.ai/api/alpha/decisions' }, 's', q);
+    expect(model(viaUrl)).toBe('~typesafe/jev-latest');
+    expect(resolveEndpoint({ apiKey: 'sk-or-v1-k' })).toEqual({
+      provider: 'openrouter',
+      url: 'https://openrouter.ai/api/alpha/decisions',
+      model: '~typesafe/jev-latest',
+    });
+    expect(resolveEndpoint({ apiKey: 'k' })).toEqual({
+      provider: 'typesafe',
+      url: 'https://api.typesafe.ai/v1/systemone',
+      model: 'jev-latest',
+    });
+  });
+
   it('rejects failed and malformed responses', () => {
     expect(() => parseJevResponse(500, false, 'boom')).toThrow(/500/);
     expect(() => parseJevResponse(200, true, 'not json')).toThrow(/malformed/);
@@ -425,9 +453,33 @@ describe('HTTP client', () => {
     expect(JSON.parse(bodies[0]!).model).toBe('jev-test');
 
     const keyless = new JevClient({ apiKey: '' });
-    await expect(keyless.ask('s', {})).rejects.toThrow(/TYPESAFE_API_KEY/);
+    await expect(keyless.ask('s', {})).rejects.toThrow(/TYPESAFE_API_KEY or OPENROUTER_API_KEY/);
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('falls back to OPENROUTER_API_KEY when TYPESAFE_API_KEY is unset or empty', async () => {
+    vi.stubEnv('TYPESAFE_API_KEY', '');
+    vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-v1-env');
+    const urls: string[] = [];
+    const client = new JevClient({
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        urls.push(String(url));
+        expect((init?.headers as Record<string, string>).authorization).toBe('Bearer sk-or-v1-env');
+        return new Response(JSON.stringify({ answers: { q: { type: 'noul', noul: 0.4 } } }), { status: 200 });
+      }) as typeof fetch,
+    });
+    await client.ask('state', { q: { type: 'noul', instructions: 'x' } });
+    expect(urls).toEqual(['https://openrouter.ai/api/alpha/decisions']);
+    vi.stubEnv('TYPESAFE_API_KEY', 'ts');
+    expect(apiKeyFromEnv()).toBe('ts');
+    vi.stubEnv('TYPESAFE_API_KEY', undefined);
+    vi.stubEnv('OPENROUTER_API_KEY', undefined);
+    expect(apiKeyFromEnv()).toBe('');
   });
 });
