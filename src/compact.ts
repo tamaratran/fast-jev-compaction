@@ -20,6 +20,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   preserveRecentMessages: 6,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
+  maxConcurrentRequests: 4,
   truncateHeadChars: 300,
 };
 
@@ -31,9 +32,13 @@ function finite(value: number | undefined, fallback: number): number {
 }
 
 export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOptions {
+  const keepThreshold = finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold);
+  if (keepThreshold < 0 || keepThreshold > 1) {
+    throw new RangeError('keepThreshold must be between 0 and 1');
+  }
   return {
     goal: options.goal ?? DEFAULT_OPTIONS.goal,
-    keepThreshold: finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold),
+    keepThreshold,
     preserveRecentMessages: Math.max(
       0,
       Math.floor(
@@ -44,6 +49,9 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     maxRequestTokens: Math.max(
       1,
       finite(options.maxRequestTokens, DEFAULT_OPTIONS.maxRequestTokens),
+    ),
+    maxConcurrentRequests: Math.max(
+      1, Math.floor(finite(options.maxConcurrentRequests, DEFAULT_OPTIONS.maxConcurrentRequests)),
     ),
     truncateHeadChars: Math.max(
       0,
@@ -103,6 +111,13 @@ export function decideCall(
   answer: CallAnswer,
   options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
 ): CallDecision {
+  if (!Number.isFinite(options.keepThreshold) || options.keepThreshold < 0 || options.keepThreshold > 1) {
+    throw new RangeError('keepThreshold must be between 0 and 1');
+  }
+  if (![answer.keepCall, answer.keepResult].every(value =>
+    Number.isFinite(value) && value >= 0 && value <= 1)) {
+    throw new Error('Invalid keep probabilities');
+  }
   const base = { id: call.id, tool: call.tool, ...answer };
   if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
   if (answer.keepResult >= options.keepThreshold) {
@@ -132,6 +147,33 @@ async function askBatch(
   );
 }
 
+/** Keep failures atomic while avoiding an unbounded burst of HTTP requests. */
+async function askBatches(
+  asker: JevAsker,
+  state: CompactionState,
+  batches: readonly ToolCall[][],
+  concurrency: number,
+): Promise<Map<string, CallAnswer>[]> {
+  const answers: Map<string, CallAnswer>[] = new Array(batches.length);
+  let cursor = 0;
+  let failed = false;
+  let failure: unknown;
+  const worker = async (): Promise<void> => {
+    while (!failed && cursor < batches.length) {
+      const index = cursor++;
+      try {
+        answers[index] = await askBatch(asker, state, batches[index]!);
+      } catch (error) {
+        if (!failed) failure = error;
+        failed = true;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
+  if (failed) throw failure;
+  return answers;
+}
+
 function truncatedResultText(text: string, isError: boolean, headChars: number): string {
   if (text.length <= headChars + 120) return text;
   const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : '';
@@ -156,7 +198,7 @@ export function applyDecisions(
   const actions = new Map<string, CallDecision['action']>();
   for (const decision of decisions) {
     const call = byId.get(decision.id);
-    if (call && decision.action !== 'keep') actions.set(call.tool_use_id, decision.action);
+    if (call && !call.pinned && decision.action !== 'keep') actions.set(call.tool_use_id, decision.action);
   }
   const kept: Message[] = [];
   for (const message of messages) {
@@ -269,11 +311,19 @@ export async function compact(
   let batches: ToolCall[][] = [];
   const answers = new Map<string, CallAnswer>();
   if (candidates.length > 0) {
-    const state = fitState(messages, calls, resolved);
+    const largestQuestion = candidates.reduce((largest, call) => Math.max(
+      largest, estimateTokens(JSON.stringify(questionsFor(call))),
+    ), 0);
+    const stateBudget = resolved.maxRequestTokens - REQUEST_OVERHEAD_TOKENS - largestQuestion;
+    if (stateBudget < 1) throw new Error('request budget leaves no room for state and questions');
+    const state = fitState(messages, calls, {
+      ...resolved,
+      maxStateTokens: Math.min(resolved.maxStateTokens, stateBudget),
+    });
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
-    const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
+    const answered = await askBatches(
+      asker, state.state, batches, resolved.maxConcurrentRequests,
     );
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }
