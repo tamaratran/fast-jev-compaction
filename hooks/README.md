@@ -41,6 +41,19 @@ For local development:
 CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .
 ```
 
+## `/jevcompact`
+
+The plugin registers its own slash command, `/jevcompact`, at session start. It
+runs a Jev compaction on demand, calling `$.session.compact()` with `trigger`
+`plugin`; the outcome reads exactly like a plugin compaction run (toast, decision
+log and fallback). A vetoed or failed compaction is reported by the command's own
+output line instead of a prompt.
+
+`/compact` is left alone: the `session.compact` hook matches `trigger: 'plugin'`
+only, so the person's manual `/compact` (`trigger: 'manual'`) keeps Claude Code's
+built-in summary. Auto-compaction at `compactAtPercent` also flows through
+`$.session.compact()` and therefore runs Jev.
+
 ## Configuration
 
 The plugin declares these `userConfig` values in
@@ -63,16 +76,15 @@ development setup.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
-the response is malformed, the key is unavailable, the history cannot be
-fitted into the state budget, or the estimated reduction is below
-`minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
-built-in compaction. The outcome is shown as a toast and logged with the
-reduction, per-reason counts, state size and request count; a per-call
-`decisions:` line with both probabilities is logged for diagnosis. The
-`turn.complete` hook requests
-compaction when `context.percent` reaches `compactAtPercent`, with an
-in-flight guard.
+do. The `session.compact` hook (matched on `trigger: 'plugin'`) runs the Jev
+requests concurrently. If Jev fails, the response is malformed, the key is
+unavailable, the history cannot be fitted into the state budget, or the
+estimated reduction is below `minReductionRatio`, the hook logs a fallback and
+delegates to Claude Code's built-in compaction. The outcome is shown as a toast
+and logged with the reduction, per-reason counts, state size and request count;
+a per-call `decisions:` line with both probabilities is logged for diagnosis.
+The `turn.complete` hook requests compaction when `context.percent` reaches
+`compactAtPercent`, with an in-flight guard.
 
 ## Scope and caveat
 

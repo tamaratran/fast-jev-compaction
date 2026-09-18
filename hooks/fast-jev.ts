@@ -1,7 +1,9 @@
 import type {
+  CommandSpec,
   On,
   PluginOptions,
   Register,
+  SessionCompactResult,
   SessionMessage,
   ToolResultSummary,
   ToolUseSummary,
@@ -256,11 +258,65 @@ function notify(
   $.ui.toast(text, { timeoutMs: 15_000 });
 }
 
+export const JEV_COMPACT_COMMAND = 'jevcompact';
+export const JEV_COMPACT_DESCRIPTION =
+  'Runs a Jev compaction of this session now, without waiting for the context threshold.';
+
+/** The `$` surface `registerJevCompactCommand` needs, so it can be tested without an engine. */
+export type CommandRegisterHook = {
+  command: {
+    register: (command: CommandSpec) => Promise<unknown>;
+  };
+};
+
+/** Declares this plugin's `/jevcompact` slash command for the session. */
+export async function registerJevCompactCommand($: CommandRegisterHook): Promise<void> {
+  await $.command.register({ name: JEV_COMPACT_COMMAND, description: JEV_COMPACT_DESCRIPTION });
+}
+
+/** The `$` surface `runJevCompactCommand` needs, so it can be tested without an engine. */
+export type SessionCompactHook = {
+  session: {
+    compact: () => Promise<SessionCompactResult>;
+  };
+};
+
+/**
+ * Serves the `/jevcompact` command: asks the engine to compact, which re-enters
+ * this plugin's own `session.compact` hook, and words the command's output.
+ */
+export async function runJevCompactCommand($: SessionCompactHook): Promise<string> {
+  try {
+    const result = await $.session.compact();
+    if ('skip' in result && result.skip) {
+      return `compaction skipped (${result.skip})`;
+    }
+    return 'compaction complete';
+  } catch (error) {
+    return `compaction failed (${error instanceof Error ? error.message : String(error)})`;
+  }
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
 
-  on('session.compact', async ($, event, next) => {
+  on('session.start', async ($, event, next) => {
+    try {
+      await registerJevCompactCommand($);
+    } catch (error) {
+      $.ui.log(
+        `/${JEV_COMPACT_COMMAND} not registered (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+    return next(event);
+  });
+
+  on('command.run', { command: JEV_COMPACT_COMMAND }, async ($) => {
+    return { text: await runJevCompactCommand($) };
+  });
+
+  on('session.compact', { trigger: 'plugin' }, async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {

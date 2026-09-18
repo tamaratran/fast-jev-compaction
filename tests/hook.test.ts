@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import type { CommandSpec, On } from 'claude-code';
 import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  JEV_COMPACT_COMMAND,
+  JEV_COMPACT_DESCRIPTION,
+  register,
+  registerJevCompactCommand,
   resolveHookConfig,
+  runJevCompactCommand,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
@@ -65,6 +71,63 @@ describe('hook config', () => {
       compactAtPercent: 60,
       minReductionRatio: 0.25,
     });
+  });
+});
+
+describe('register wiring', () => {
+  function captureRegistrations() {
+    const registrations: { pattern: string; matcher?: unknown }[] = [];
+    const on = ((pattern: string, matcher?: unknown) => {
+      registrations.push({ pattern, matcher });
+      return { unsubscribe() {} };
+    }) as unknown as On;
+    return { registrations, on };
+  }
+
+  it('routes only plugin-triggered compactions through Jev, leaving /compact built-in', () => {
+    const { registrations, on } = captureRegistrations();
+    register(on, {});
+    const compact = registrations.find((r) => r.pattern === 'session.compact');
+    expect(compact?.matcher).toEqual({ trigger: 'plugin' });
+    expect(registrations.map((r) => r.pattern)).toEqual([
+      'session.start',
+      'command.run',
+      'session.compact',
+      'turn.complete',
+    ]);
+  });
+});
+
+describe('jevcompact command', () => {
+  it('registers the slash command with the plugin name', async () => {
+    const registered: CommandSpec[] = [];
+    await registerJevCompactCommand({ command: { register: async (spec) => registered.push(spec) } });
+    expect(registered).toEqual([{ name: JEV_COMPACT_COMMAND, description: JEV_COMPACT_DESCRIPTION }]);
+  });
+
+  it('reports a completed compaction', async () => {
+    const text = await runJevCompactCommand({
+      session: { compact: async () => ({ messages: [], tokensBefore: 10, tokensAfter: 3 }) },
+    });
+    expect(text).toBe('compaction complete');
+  });
+
+  it('reports a vetoed compaction with the skip reason', async () => {
+    const text = await runJevCompactCommand({
+      session: { compact: async () => ({ skip: 'a hook said no' }) },
+    });
+    expect(text).toBe('compaction skipped (a hook said no)');
+  });
+
+  it('reports a failing compaction', async () => {
+    const text = await runJevCompactCommand({
+      session: {
+        compact: async () => {
+          throw new Error('a turn is running');
+        },
+      },
+    });
+    expect(text).toBe('compaction failed (a turn is running)');
   });
 });
 
