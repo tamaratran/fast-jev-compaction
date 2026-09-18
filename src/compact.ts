@@ -31,9 +31,13 @@ function finite(value: number | undefined, fallback: number): number {
 }
 
 export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOptions {
+  const keepThreshold = finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold);
+  if (keepThreshold < 0 || keepThreshold > 1) {
+    throw new RangeError('keepThreshold must be between 0 and 1');
+  }
   return {
     goal: options.goal ?? DEFAULT_OPTIONS.goal,
-    keepThreshold: finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold),
+    keepThreshold,
     preserveRecentMessages: Math.max(
       0,
       Math.floor(
@@ -103,6 +107,13 @@ export function decideCall(
   answer: CallAnswer,
   options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
 ): CallDecision {
+  if (!Number.isFinite(options.keepThreshold) || options.keepThreshold < 0 || options.keepThreshold > 1) {
+    throw new RangeError('keepThreshold must be between 0 and 1');
+  }
+  if (![answer.keepCall, answer.keepResult].every(value =>
+    Number.isFinite(value) && value >= 0 && value <= 1)) {
+    throw new Error('Invalid keep probabilities');
+  }
   const base = { id: call.id, tool: call.tool, ...answer };
   if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
   if (answer.keepResult >= options.keepThreshold) {
