@@ -59,9 +59,18 @@ export function isPinned(
  * Pairs every tool_use with its tool_result by `tool_use_id`. Calls without a
  * result are not candidates (there is nothing to drop yet).
  */
+/** Head and tail of a tool result, whitespace collapsed, for a keep question. */
+export function resultPreview(text: string, chars: number): string {
+  if (chars <= 0) return '';
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= chars * 2 + 20) return flat;
+  return `${flat.slice(0, chars)} … ${flat.slice(-chars)}`;
+}
+
 export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
+  previewChars = 0,
 ): ToolCall[] {
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
@@ -82,6 +91,9 @@ export function collectToolCalls(
         callIndex,
         resultIndex: found.index,
         resultChars: found.result.text.length,
+        ...(previewChars > 0
+          ? { resultPreview: resultPreview(found.result.text, previewChars) }
+          : {}),
         isError: found.result.isError ?? false,
         pinned:
           isPinned(callIndex, messages.length, preserveRecentMessages) ||
