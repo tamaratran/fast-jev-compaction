@@ -22,6 +22,7 @@ import type {
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
+  requireKeepSignal: true,
   model: DEFAULT_MODEL,
 };
 
@@ -44,12 +45,19 @@ export type HookConfig = CompactOptions & {
   apiKey?: string;
   compactAtPercent: number;
   minReductionRatio: number;
+  /** Fall back when no scored call cleared the threshold. Default true. */
+  requireKeepSignal: boolean;
   model: string;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
   const value = options[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function optionBoolean(options: PluginOptions, key: string, fallback: boolean): boolean {
+  const value = options[key];
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function optionString(options: PluginOptions, key: string): string | undefined {
@@ -77,6 +85,11 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       options,
       'minReductionRatio',
       HOOK_DEFAULTS.minReductionRatio,
+    ),
+    requireKeepSignal: optionBoolean(
+      options,
+      'requireKeepSignal',
+      HOOK_DEFAULTS.requireKeepSignal,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
@@ -176,6 +189,22 @@ function percent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
+/**
+ * True when Jev scored at least one call and not one of them cleared the
+ * threshold, so every scored call was dropped.
+ *
+ * The decisions then carry no information: the same output appears when Jev
+ * answers every question with zero. Because such a run deletes everything it
+ * was asked about, it also produces the largest possible reduction, so
+ * `minReductionRatio` accepts it. Distinguishing the two needs the scores, not
+ * the size of the result.
+ */
+export function lacksKeepSignal(result: CompactResult): boolean {
+  const { calls, pinned, kept, resultsDropped } = result.stats;
+  const scored = calls - pinned;
+  return scored > 0 && kept === 0 && resultsDropped === 0;
+}
+
 export function summarize(result: CompactResult): string {
   const { stats } = result;
   const parts = [
@@ -268,6 +297,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
         return { status: response.status, ok: response.ok, text: response.text };
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
+      if (config.requireKeepSignal && lacksKeepSignal(result)) {
+        notify(
+          $,
+          `fallback to built-in summary (no keep signal: every scored call was dropped, ${summarize(result)})`,
+        );
+        return next(event);
+      }
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
           $,

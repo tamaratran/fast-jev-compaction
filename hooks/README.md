@@ -52,6 +52,7 @@ The plugin declares these `userConfig` values in
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `minReductionRatio` | `0.25` |
+| `requireKeepSignal` | `true` |
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
@@ -61,13 +62,23 @@ The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
-the response is malformed, the key is unavailable, the history cannot be
-fitted into the state budget, or the estimated reduction is below
-`minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
-built-in compaction. The outcome is shown as a toast and logged with the
+Every option except `apiKey`, `compactAtPercent`, `minReductionRatio`,
+`requireKeepSignal` and `model` is passed straight to the library; see the root
+README for what they do. The `session.compact` hook runs the Jev requests
+concurrently. If Jev fails, the response is malformed, the key is unavailable,
+the history cannot be fitted into the state budget, or the estimated reduction
+is below `minReductionRatio`, the hook logs a fallback and delegates to Claude
+Code's built-in compaction.
+
+It also falls back when Jev scored at least one call and kept none of them
+(`requireKeepSignal`, on by default). Those decisions are the same ones a Jev
+that answered zero to every question would produce, so they say nothing about
+the transcript. That run also deletes every candidate, which makes it the
+largest possible reduction, so `minReductionRatio` accepts it: the check has a
+floor but no ceiling, and the uninformative outcome looks like the best one.
+Set the option to `false` to keep the pruned history anyway.
+
+The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call
 `decisions:` line with both probabilities is logged for diagnosis. The
 `turn.complete` hook requests

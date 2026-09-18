@@ -34,6 +34,12 @@
       "description": "Minimum estimated character reduction required to replace history.",
       "default": 0.25
     },
+    "requireKeepSignal": {
+      "type": "boolean",
+      "title": "Require a keep signal",
+      "description": "Fall back to the built-in summary when Jev kept no scored call, which is indistinguishable from it answering zero to every question.",
+      "default": true
+    },
     "maxStateTokens": {
       "type": "number",
       "title": "Maximum Jev state tokens",
