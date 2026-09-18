@@ -243,6 +243,14 @@ async function getApiKey(
   return undefined;
 }
 
+function log($: { ui: { log: (text: string) => void } }, text: string): void {
+  try {
+    $.ui.log(text);
+  } catch {
+    // Diagnostics are best-effort; the compaction result must still be returned.
+  }
+}
+
 function notify(
   $: {
     ui: {
@@ -252,8 +260,12 @@ function notify(
   },
   text: string,
 ): void {
-  $.ui.log(text);
-  $.ui.toast(text, { timeoutMs: 15_000 });
+  log($, text);
+  try {
+    $.ui.toast(text, { timeoutMs: 15_000 });
+  } catch {
+    // A disconnected UI must not prevent the native fallback.
+  }
 }
 
 export const register: Register = (on: On, options: PluginOptions) => {
@@ -267,7 +279,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
-      for (const line of decisionLogLines(result)) $.ui.log(line);
+      for (const line of decisionLogLines(result)) log($, line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
           $,
@@ -291,13 +303,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     if (compacting) return next(event);
+    compacting = true;
     try {
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
-      compacting = true;
       await $.session.compact();
     } catch (error) {
-      $.ui.log(
+      log($,
         `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,
       );
     } finally {
