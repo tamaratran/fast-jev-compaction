@@ -162,6 +162,32 @@ To run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 
 from the repository root. No publishing step is required; the marketplace is
 just the repo's `.claude-plugin/marketplace.json`.
 
+## Codex plugin
+
+The repository also contains a native Agent Plugins manifest (`plugin.json`),
+a `.codex-plugin` compatibility manifest, and Codex lifecycle hooks. Codex does
+not currently let a hook replace the compacted message history. Instead, the
+plugin records stable `UserPromptSubmit` and `PostToolUse` events, lets Codex
+perform its built-in compaction, then uses Jev to restore selected verbatim
+context through the post-compaction `SessionStart` hook.
+
+Build before packaging or installing from a local marketplace so the hook
+runtime exists at `dist/codex-hook.js`:
+
+```sh
+npm install
+npm run build
+export TYPESAFE_API_KEY=...
+```
+
+Codex asks you to review and trust bundled hooks before they run. Captured hook
+records are stored per session under Codex's `PLUGIN_DATA` directory and are
+cleared after a successful restoration. Optional environment variables are
+`FAST_JEV_MODEL`, `FAST_JEV_KEEP_THRESHOLD`,
+`FAST_JEV_PRESERVE_RECENT_MESSAGES`, `FAST_JEV_MAX_STATE_TOKENS`,
+`FAST_JEV_MAX_REQUEST_TOKENS`, `FAST_JEV_TRUNCATE_HEAD_CHARS`, and
+`FAST_JEV_CODEX_MAX_CONTEXT_CHARS`.
+
 ## Development
 
 ```sh

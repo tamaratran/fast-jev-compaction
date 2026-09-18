@@ -1,0 +1,44 @@
+{
+  "description": "Capture stable Codex hook events and restore Jev-selected context after compaction.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/dist/codex-hook.js\"",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\dist\\codex-hook.js\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/dist/codex-hook.js\"",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\dist\\codex-hook.js\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "^compact$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/dist/codex-hook.js\"",
+            "commandWindows": "node \"%PLUGIN_ROOT%\\dist\\codex-hook.js\"",
+            "timeout": 120,
+            "statusMessage": "Restoring Jev-selected context",
+            "additionalContextLimit": 20000
+          }
+        ]
+      }
+    ]
+  }
+}

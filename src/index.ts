@@ -4,3 +4,4 @@ export * from './client.js';
 export * from './state.js';
 export * from './compact.js';
 export * from './messages.js';
+export * from './codex.js';

@@ -15,11 +15,15 @@
   },
   "files": [
     "dist",
+    "codex",
+    ".codex-plugin",
+    "plugin.json",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit && npm run typecheck:hooks",
     "test": "vitest run",
     "demo": "tsx examples/demo.ts",

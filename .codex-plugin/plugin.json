@@ -1,0 +1,26 @@
+{
+  "name": "fast-jev-compaction",
+  "version": "0.3.0",
+  "description": "Restore Jev-selected verbatim tool context after Codex compaction.",
+  "author": {
+    "name": "tamaratran",
+    "url": "https://github.com/tamaratran"
+  },
+  "homepage": "https://github.com/tamaratran/fast-jev-compaction",
+  "repository": "https://github.com/tamaratran/fast-jev-compaction",
+  "license": "MIT",
+  "keywords": ["codex", "compaction", "context", "jev"],
+  "interface": {
+    "displayName": "Fast Jev Compaction",
+    "shortDescription": "Restore useful verbatim tool context after compaction.",
+    "longDescription": "Uses TypeSafe Jev to select useful user prompts, tool calls, and tool results, then restores that verbatim context after Codex runs its built-in compaction.",
+    "developerName": "tamaratran",
+    "category": "Developer Tools",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/tamaratran/fast-jev-compaction",
+    "defaultPrompt": [
+      "Explain how Fast Jev Compaction preserves tool context."
+    ],
+    "brandColor": "#111827"
+  }
+}
