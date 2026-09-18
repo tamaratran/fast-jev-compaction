@@ -16,15 +16,31 @@ import type {
 
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
-  keepThreshold: 0.5,
+  /**
+   * A Noul of 0.5 is Jev saying it is unsure, not "half". Distance from 0.5 is
+   * the confidence signal, so a threshold of 0.5 puts every uncertain answer on
+   * the delete side of an irreversible decision. Deleting context is the
+   * high-stakes action here, so the gate sits on the drop: a call is removed
+   * only when Jev is fairly sure it is no longer needed. See
+   * https://docs.typesafe.ai/confidence.
+   */
+  keepThreshold: 0.15,
   preserveRecentMessages: 6,
   maxStateTokens: 25_000,
-  maxRequestTokens: 30_000,
+  maxRequestTokens: 60_000,
   truncateHeadChars: 300,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
 const REQUEST_OVERHEAD_TOKENS = 20;
+
+/**
+ * Jev's second context limit: the state plus the *single longest* question must
+ * fit this, independently of the whole-request budget. See
+ * https://docs.typesafe.ai/models — "64k tokens per request; 32k tokens for
+ * `state` plus the longest question".
+ */
+const MAX_STATE_PLUS_QUESTION_TOKENS = 32_000;
 
 function finite(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -52,16 +68,28 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
   };
 }
 
-/** The two `noul` questions asked about one call: keep the call, keep its result. */
+/**
+ * The two `noul` questions asked about one call: keep the call, keep its
+ * result. Both carry criteria, because the boundary is subtle and the docs ask
+ * for `true`/`false` sides whenever it is: https://docs.typesafe.ai/primitives/noul.
+ */
 export function questionsFor(call: ToolCall): JevQuestions {
   return {
     [`call_${call.id}`]: {
       type: 'noul',
-      instructions: `Tool call ${call.id} (${call.tool}) should stay in the history: knowing this call was made, with its input, still matters for what the assistant does next`,
+      instructions: `Tool call \`${call.id}\` (${call.tool}) should stay in \`history\`: knowing this call was made, with its input, still matters for what the assistant does next`,
+      criteria: {
+        true: 'The call records a change to the world, or a constraint the assistant must not violate again: an edit or write that changed a file, a command that installed, moved or deleted something, a check whose outcome the user was told about',
+        false: 'The call only gathered information that has since been superseded or acted upon: a search used to locate a file that was then edited, a read of a file that has since changed, a failing check that has since been fixed',
+      },
     },
     [`result_${call.id}`]: {
       type: 'noul',
-      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do`,
+      instructions: `The full output of tool call \`${call.id}\` (${call.tool}, ${call.resultChars} chars) should stay in \`history\` verbatim: the assistant still needs its contents, and re-running the tool would not do`,
+      criteria: {
+        true: 'The exact contents are still in use and could not be recovered by re-running the tool: an error the assistant is still diagnosing, output the user asked about, the current state of a file being edited',
+        false: 'The contents are stale, already stated in the assistant text, or trivially re-obtainable: a directory listing already used, a passing test run, a file read before it was rewritten',
+      },
     },
   };
 }
@@ -81,6 +109,12 @@ export function batchCalls(
   let currentTokens = 0;
   for (const call of calls) {
     const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
+    if (stateTokens + tokens + REQUEST_OVERHEAD_TOKENS > MAX_STATE_PLUS_QUESTION_TOKENS) {
+      throw new Error(
+        `state plus one question exceeds Jev's ${MAX_STATE_PLUS_QUESTION_TOKENS}-token limit ` +
+          `(~${stateTokens} state + ~${tokens} question); lower maxStateTokens`,
+      );
+    }
     if (current.length > 0 && currentTokens + tokens > budget) {
       batches.push(current);
       current = [];

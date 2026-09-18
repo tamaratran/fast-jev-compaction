@@ -11,6 +11,7 @@ import {
   fitState,
   JevClient,
   parseJevResponse,
+  questionsFor,
   reductionRatio,
   resolveOptions,
   type HistoryToolCall,
@@ -74,10 +75,10 @@ const fit = {
 describe('options', () => {
   it('fills in defaults and ignores non-finite values', () => {
     expect(resolveOptions()).toMatchObject({
-      keepThreshold: 0.5,
+      keepThreshold: 0.15,
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
-      maxRequestTokens: 30_000,
+      maxRequestTokens: 60_000,
       truncateHeadChars: 300,
     });
     expect(resolveOptions({
@@ -85,7 +86,7 @@ describe('options', () => {
       preserveRecentMessages: 2.7,
       truncateHeadChars: -1.2,
     })).toMatchObject({
-      keepThreshold: 0.5,
+      keepThreshold: 0.15,
       preserveRecentMessages: 2,
       truncateHeadChars: 0,
     });
@@ -336,15 +337,20 @@ describe('compact', () => {
   it('resends the full state with every batch and merges the answers', async () => {
     const seen: Seen[] = [];
     const messages = transcript();
-    const stateTokens = fitState(messages, collectToolCalls(messages, 1), {
+    const calls = collectToolCalls(messages, 1);
+    const stateTokens = fitState(messages, calls, {
       ...fit,
       goal: '',
       preserveRecentMessages: 1,
     }).tokens;
+    // Room for exactly one call's questions, so every call gets its own batch.
+    const perCall = Math.max(
+      ...calls.map((call) => estimateTokens(JSON.stringify(questionsFor(call)))),
+    );
     const output = await compact(
       messages,
       fakeJev((name) => (name.startsWith('call_') ? 0.9 : 0.1), seen),
-      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + 150 },
+      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + perCall + 25 },
     );
 
     expect(output.stats.requests).toBe(seen.length);
@@ -429,5 +435,53 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('jev context limits', () => {
+  const call = (id: string): ToolCall => ({
+    id,
+    tool_use_id: `toolu_${id}`,
+    tool: 'Read',
+    input: { file_path: 'src/a.ts' },
+    callIndex: 1,
+    resultIndex: 2,
+    resultChars: 100,
+    isError: false,
+    pinned: false,
+  });
+
+  it('uses the whole 64k request budget, not 32k', () => {
+    const calls = Array.from({ length: 90 }, (_, i) => call(`t${i + 1}`));
+    // One request under the real 64k limit, several under the old 30k ceiling.
+    expect(batchCalls(calls, 25_000, { maxRequestTokens: 60_000 })).toHaveLength(1);
+    expect(
+      batchCalls(calls, 25_000, { maxRequestTokens: 30_000 }).length,
+    ).toBeGreaterThan(5);
+  });
+
+  it('rejects a state that leaves no room for a single question', () => {
+    expect(() => batchCalls([call('t1')], 31_990, { maxRequestTokens: 60_000 })).toThrow(
+      /state plus one question/,
+    );
+  });
+});
+
+describe('keep threshold', () => {
+  const call = { id: 't1', tool: 'Read', pinned: false };
+
+  it('keeps a call Jev is unsure about', () => {
+    const decision = decideCall(call, { keepCall: 0.5, keepResult: 0.5 }, resolveOptions());
+    expect(decision.action).toBe('keep');
+  });
+
+  it('drops only when Jev is confident the call is spent', () => {
+    const options = resolveOptions();
+    expect(decideCall(call, { keepCall: 0.2, keepResult: 0.05 }, options).action).toBe(
+      'drop_result',
+    );
+    expect(decideCall(call, { keepCall: 0.05, keepResult: 0.03 }, options).action).toBe(
+      'drop_call',
+    );
   });
 });

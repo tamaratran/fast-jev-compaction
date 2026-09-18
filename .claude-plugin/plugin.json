@@ -13,8 +13,8 @@
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
-      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.",
-      "default": 0.5
+      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed. A Noul of 0.5 means Jev is unsure, so keep this low.",
+      "default": 0.15
     },
     "preserveRecentMessages": {
       "type": "number",
@@ -43,8 +43,8 @@
     "maxRequestTokens": {
       "type": "number",
       "title": "Maximum Jev request tokens",
-      "description": "Estimated token budget for state plus questions in one Jev request.",
-      "default": 30000
+      "description": "Estimated token budget for state plus questions in one Jev request. Jev allows 64k.",
+      "default": 60000
     },
     "truncateHeadChars": {
       "type": "number",
