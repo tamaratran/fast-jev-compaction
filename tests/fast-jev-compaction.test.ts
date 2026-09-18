@@ -387,6 +387,32 @@ describe('compact', () => {
       /Invalid Jev answer/,
     );
   });
+
+  it.each([
+    ['call_t1', -0.1],
+    ['call_t1', 1.1],
+    ['result_t1', -0.1],
+    ['result_t1', 1.1],
+  ])('rejects an out-of-range probability for %s: %s', async (name, probability) => {
+    await expect(
+      compact(transcript(), fakeJev((key) => (key === name ? probability : 0.5)), {
+        preserveRecentMessages: 1,
+      }),
+    ).rejects.toThrow(`Invalid Jev answer for ${name}`);
+  });
+
+  it.each([0, 1])('accepts the boundary probability %s', async (probability) => {
+    const output = await compact(transcript(), fakeJev(() => probability), {
+      preserveRecentMessages: 1,
+    });
+    expect(output.decisions.map((decision) => decision.action)).toEqual(
+      Array(3).fill(probability === 0 ? 'drop_call' : 'keep'),
+    );
+  });
+
+  it('rejects an array-shaped answers map', () => {
+    expect(() => parseJevResponse(200, true, '{"answers":[]}')).toThrow(/missing answers/);
+  });
 });
 
 describe('HTTP client', () => {

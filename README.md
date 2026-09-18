@@ -41,9 +41,10 @@ built-in compaction summary with the original messages.
    **result** stay verbatim (its contents are still needed and re-running the
    tool would not do).
 5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (30k by default, under Jev's 32k request
-   limit). The same full state is resent with every request; requests run
-   concurrently and their answers are merged.
+   stays under `maxRequestTokens` (30k by default). Jev 1.13 currently documents
+   64k tokens for the whole request and 32k for `state` plus the longest
+   question; the default stays under both. The same full state is resent with
+   every request; requests run concurrently and their answers are merged.
 6. Decisions per call, against `keepThreshold`:
    - `keepResult ≥ threshold` → keep call and result;
    - else `keepCall ≥ threshold` → keep the call, truncate the result to its
