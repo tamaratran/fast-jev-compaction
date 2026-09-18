@@ -64,8 +64,16 @@ export function collectToolCalls(
   preserveRecentMessages: number,
 ): ToolCall[] {
   const results = new Map<string, { index: number; result: ToolResult }>();
+  const uses = new Set<string>();
+  for (const message of messages) {
+    for (const tool of message.toolUses) {
+      if (uses.has(tool.tool_use_id)) throw new Error(`Duplicate tool_use_id: ${tool.tool_use_id}`);
+      uses.add(tool.tool_use_id);
+    }
+  }
   messages.forEach((message, index) => {
     for (const result of message.toolResults ?? []) {
+      if (results.has(result.tool_use_id)) throw new Error(`Duplicate tool_result: ${result.tool_use_id}`);
       results.set(result.tool_use_id, { index, result });
     }
   });
@@ -74,6 +82,7 @@ export function collectToolCalls(
     for (const tool of message.toolUses) {
       const found = results.get(tool.tool_use_id);
       if (!found) continue;
+      if (found.index < callIndex) throw new Error(`Tool result precedes its call: ${tool.tool_use_id}`);
       calls.push({
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
@@ -128,7 +137,7 @@ function mergeCallRuns(history: readonly HistoryEntry[], pinned: (e: HistoryEntr
   for (const entry of history) {
     const previous = merged[merged.length - 1];
     const foldable = (e: HistoryEntry): boolean =>
-      !pinned(e) && e.text.length === 0 && typeof e.tool_calls?.[0] === 'string';
+      !pinned(e) && !e.pending_calls?.length && e.text.length === 0 && typeof e.tool_calls?.[0] === 'string';
     if (previous && foldable(previous) && foldable(entry) && previous.role === entry.role) {
       previous.tool_calls = [...(previous.tool_calls as string[]), ...(entry.tool_calls as string[])];
       continue;
@@ -154,6 +163,7 @@ function historyEntries(
   inputChars: number,
 ): HistoryEntry[] {
   const byMessage = callsByMessage(calls);
+  const paired = new Set(calls.map(call => call.tool_use_id));
   const entries: HistoryEntry[] = [];
   messages.forEach((message, i) => {
     const toolCalls = (byMessage.get(i) ?? []).map((call) => ({
@@ -162,9 +172,15 @@ function historyEntries(
       input: inputText(call.input, inputChars),
       result: resultNote(call),
     }));
-    if (message.text.trim().length === 0 && toolCalls.length === 0) return;
+    const pending = message.toolUses.filter(tool => !paired.has(tool.tool_use_id)).map(tool => ({
+      tool_use_id: tool.tool_use_id,
+      tool: tool.tool,
+      input: inputText(tool.input, inputChars),
+    }));
+    if (message.text.trim().length === 0 && toolCalls.length === 0 && pending.length === 0) return;
     const entry: HistoryEntry = { i, role: message.role, text: message.text };
     if (toolCalls.length > 0) entry.tool_calls = toolCalls;
+    if (pending.length > 0) entry.pending_calls = pending;
     entries.push(entry);
   });
   return entries;
@@ -278,7 +294,7 @@ export function fitState(
   const left = new Set<number>();
   for (const index of order) {
     const entry = history[index]!;
-    if (pinned(entry) || entry.tool_calls) continue;
+    if (pinned(entry) || entry.tool_calls || entry.pending_calls?.length) continue;
     left.add(index);
     tokens -= perEntry[index] ?? 0;
     if (fits()) {

@@ -76,6 +76,8 @@ export interface HistoryEntry {
   text: string;
   /** Structured per call, or one compact line per call once the state has to shrink. */
   tool_calls?: HistoryToolCall[] | string[];
+  /** Calls without a paired result: context only, never deletion candidates. */
+  pending_calls?: { tool_use_id: string; tool: string; input: string }[];
 }
 
 /** The state sent with every Jev request: the whole history, results omitted. */
