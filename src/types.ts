@@ -42,6 +42,8 @@ export interface ToolCall {
   /** Index of the message holding the tool_result block. */
   resultIndex: number;
   resultChars: number;
+  /** Whitespace-collapsed head and tail of the result, shown to Jev; empty when disabled. */
+  resultPreview?: string;
   isError: boolean;
   /** In the first or the newest preserved messages; never a candidate. */
   pinned: boolean;
@@ -105,6 +107,12 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Characters from each end of a tool result quoted in its keep question, so
+   * Jev judges the output's content rather than only its length. 0 disables.
+   * Default 300.
+   */
+  resultPreviewChars?: number;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +122,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  resultPreviewChars: number;
 }
 
 export interface CompactResult {

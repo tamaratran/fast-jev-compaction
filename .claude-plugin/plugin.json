@@ -52,6 +52,12 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "resultPreviewChars": {
+      "type": "number",
+      "title": "Tool result preview for Jev",
+      "description": "Characters from each end of a tool result quoted in its keep question, so Jev can judge the content and not only its length; 0 disables.",
+      "default": 300
+    },
     "model": {
       "type": "string",
       "title": "Jev model",
