@@ -3,11 +3,18 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  lacksKeepSignal,
   resolveHookConfig,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
-import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
+import {
+  applyDecisions,
+  collectToolCalls,
+  decideCall,
+  reductionRatio,
+  type Message,
+} from '../src/index.js';
 
 type SessionMessage = Message & { handle?: string };
 
@@ -53,7 +60,12 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      requireKeepSignal: true,
+      model: 'jev-latest',
+    });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -64,7 +76,63 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      requireKeepSignal: true,
     });
+  });
+
+  it('reads requireKeepSignal and ignores non-boolean values', () => {
+    expect(resolveHookConfig({ requireKeepSignal: false }).requireKeepSignal).toBe(false);
+    expect(resolveHookConfig({ requireKeepSignal: 'no' }).requireKeepSignal).toBe(true);
+  });
+});
+
+describe('keep signal', () => {
+  // The transcript is 7 messages long, so the default preserveRecentMessages
+  // of 6 would pin every call and leave nothing scored.
+  const config = { ...resolveHookConfig({}), apiKey: 'k', preserveRecentMessages: 0 };
+
+  it('flags a run where every scored call was dropped', async () => {
+    // Jev answering 0 to everything is what the replays in #26 and #52 observe
+    // on real sessions: no result score reaches the threshold.
+    const { result } = await compactSession(transcript(), config, jevFetch(() => 0));
+    expect(result.stats.kept).toBe(0);
+    expect(result.stats.resultsDropped).toBe(0);
+    expect(result.stats.callsDropped).toBeGreaterThan(0);
+    expect(lacksKeepSignal(result)).toBe(true);
+    // The uninformative run is also the one that reduces the most, so the
+    // minReductionRatio guard alone accepts it.
+    expect(reductionRatio(result)).toBeGreaterThan(0.25);
+  });
+
+  it('does not flag a run that kept a result', async () => {
+    const { result } = await compactSession(
+      transcript(),
+      config,
+      jevFetch((name) => (name.startsWith('result_t2') ? 0.9 : 0)),
+    );
+    expect(result.stats.kept).toBeGreaterThan(0);
+    expect(lacksKeepSignal(result)).toBe(false);
+  });
+
+  it('does not flag a run that only truncated a result', async () => {
+    const { result } = await compactSession(
+      transcript(),
+      config,
+      jevFetch((name) => (name.startsWith('call_') ? 0.9 : 0)),
+    );
+    expect(result.stats.kept).toBe(0);
+    expect(result.stats.resultsDropped).toBeGreaterThan(0);
+    expect(lacksKeepSignal(result)).toBe(false);
+  });
+
+  it('does not flag a transcript where every call is pinned', async () => {
+    const { result } = await compactSession(
+      transcript(),
+      { ...config, preserveRecentMessages: 99 },
+      jevFetch(() => 0),
+    );
+    expect(result.stats.calls).toBe(result.stats.pinned);
+    expect(lacksKeepSignal(result)).toBe(false);
   });
 });
 
