@@ -60,7 +60,8 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 
 ```sh
 npm install fast-jev-compaction
-export TYPESAFE_API_KEY=...
+export TYPESAFE_API_KEY=...          # TypeSafe directly, or
+export OPENROUTER_API_KEY=sk-or-v1-... # Jev through OpenRouter
 ```
 
 ```ts
@@ -93,16 +94,31 @@ method) and call `compact(messages, asker, options)`; `buildJevRequest` and
 The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
 `decideCall`, `applyDecisions`) are exported too.
 
-`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
-put it in a source file.
+`apiKey` defaults to `process.env.TYPESAFE_API_KEY`, then
+`process.env.OPENROUTER_API_KEY`. Never commit the key or put it in a source
+file.
+
+### Jev through OpenRouter
+
+Jev is also served by [OpenRouter](https://openrouter.ai/~typesafe/jev-latest)
+through its Decisions endpoint, `https://openrouter.ai/api/alpha/decisions`,
+which takes the same `state` + `questions` body and returns the same `answers`
+(it is not the chat completions endpoint). An OpenRouter key (`sk-or-…`) is
+routed there automatically, with the model name mapped to OpenRouter's naming:
+`jev-latest` becomes `~typesafe/jev-latest`, a bare `jev-1.13` becomes
+`typesafe/jev-1.13`, and a name containing a slash is sent as given. Set
+`baseUrl` to force either endpoint; the model name is then mapped for the
+endpoint chosen. The Decisions path is still on OpenRouter's alpha prefix and
+may move; `baseUrl` is the escape hatch if it does. Requests are billed to the
+OpenRouter account.
 
 ## Options
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
-| `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
+| `apiKey` | `TYPESAFE_API_KEY`, then `OPENROUTER_API_KEY` | TypeSafe or OpenRouter API key (`compactMessages`/`JevClient`) |
+| `model` | `jev-latest` (`~typesafe/jev-latest` on OpenRouter) | Jev model name |
+| `baseUrl` | by key: System One, or OpenRouter Decisions for `sk-or-…` | Full endpoint URL |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
@@ -142,6 +158,9 @@ opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.j
 { "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1", "TYPESAFE_API_KEY": "<your key>" } }
 ```
 
+or, to run Jev through OpenRouter, `"OPENROUTER_API_KEY": "sk-or-v1-…"` in
+place of the TypeSafe key (see [Jev through OpenRouter](#jev-through-openrouter)).
+
 Then add this repository as a plugin marketplace and install the plugin,
 either from the shell or as slash commands inside a session:
 
@@ -151,7 +170,8 @@ claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
 
 The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
-…); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
+…); leave them at their defaults to use `TYPESAFE_API_KEY` or
+`OPENROUTER_API_KEY` from the environment.
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
 auto-compaction) goes through Jev: the toast reads
 `fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
@@ -171,6 +191,7 @@ npm test
 npm run build
 npm run validate:plugin  # claude plugin validate
 TYPESAFE_API_KEY="$(cat ~/.typesafe_key)" npm run demo
+OPENROUTER_API_KEY="$(cat ~/.openrouter_key)" npm run demo   # same demo through OpenRouter
 ```
 
 The unit tests use a fake Jev and never contact TypeSafe. The demo is the live
