@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -34,6 +34,12 @@
       "description": "Minimum estimated character reduction required to replace history.",
       "default": 0.25
     },
+    "archiveResults": {
+      "type": "boolean",
+      "title": "Save dropped tool results",
+      "description": "Write tool results dropped by compaction to .claude/fast-jev-compaction/ and cite the file in their marker, so they can be read back.",
+      "default": true
+    },
     "maxStateTokens": {
       "type": "number",
       "title": "Maximum Jev state tokens",
@@ -51,6 +57,24 @@
       "title": "Truncated tool result head",
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
+    },
+    "bashOutput": {
+      "type": "boolean",
+      "title": "Trim Bash output",
+      "description": "Trim long Bash output with Jev before the model sees it",
+      "default": false
+    },
+    "bashOutputMinChars": {
+      "type": "number",
+      "title": "Minimum Bash output characters",
+      "description": "Bash outputs at or below this length pass through untouched.",
+      "default": 4000
+    },
+    "bashOutputChunkLines": {
+      "type": "number",
+      "title": "Bash output chunk lines",
+      "description": "Number of Bash output lines grouped into each Jev chunk.",
+      "default": 20
     },
     "model": {
       "type": "string",

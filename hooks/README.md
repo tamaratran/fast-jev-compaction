@@ -55,6 +55,9 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
+| `bashOutput` | `false` |
+| `bashOutputMinChars` | `4000` |
+| `bashOutputChunkLines` | `20` |
 | `model` | `jev-latest` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
@@ -70,7 +73,20 @@ fitted into the state budget, or the estimated reduction is below
 built-in compaction. The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call
 `decisions:` line with both probabilities is logged for diagnosis. The
-`turn.complete` hook requests
+`tool.call` hook trims long Bash stdout before it reaches the model when
+`bashOutput` is enabled. It saves the combined stdout and stderr to the
+project-relative `.claude/fast-jev-compaction/` path, keeps Jev-selected output
+chunks verbatim, and replaces runs of discarded chunks with a marker pointing
+to the full output. The directory is ignored with a local `.gitignore`. If Jev
+fails, the Bash result passes through unchanged.
+
+The Bash output options are:
+
+- `bashOutput` enables trimming and defaults to `false` (opt-in).
+- `bashOutputMinChars` defaults to `4000`; shorter output passes through.
+- `bashOutputChunkLines` defaults to `20` lines per Jev chunk.
+
+The `turn.complete` hook requests
 compaction when `context.percent` reaches `compactAtPercent`, with an
 in-flight guard.
 

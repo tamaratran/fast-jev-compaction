@@ -110,6 +110,9 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `bashOutput` | `true` | Trim long Bash output before it reaches the model |
+| `bashOutputMinChars` | `4000` | Minimum Bash output length before Jev trimming |
+| `bashOutputChunkLines` | `20` | Lines grouped into each Bash output chunk |
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting
@@ -132,6 +135,13 @@ is a thin adapter that feeds `session.compact` transcripts through `src/` and
 falls back to Claude Code's built-in summary on errors or insufficient
 reduction. See [`hooks/README.md`](hooks/README.md) for configuration and the
 Claude Code 2.1.274 type reference.
+
+When enabled, the plugin's Bash output hook runs after Bash completes and
+before the result reaches the model. Jev keeps the chunks needed to understand
+the command, while discarded runs become markers that point to a saved full
+output file under the project's `.claude/fast-jev-compaction/` directory. The
+directory is locally ignored so the dumps are not committed. Set `bashOutput`
+to `false` to disable this behavior.
 
 ### Install in Claude Code
 
@@ -157,6 +167,18 @@ auto-compaction) goes through Jev: the toast reads
 `fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
 replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
 could not remove enough (short sessions, or when it fails).
+
+Trimming long Bash output before the model sees it is off by default. To
+turn it on, answer yes to "Trim Bash output" at install time, run
+`/plugin configure fast-jev-compaction` inside Claude Code afterwards, or set
+it in `~/.claude/settings.json`:
+
+```json
+{ "pluginConfigs": { "fast-jev-compaction@fast-jev-compaction": { "options": { "bashOutput": true } } } }
+```
+
+then `/reload-plugins`. Compaction works either way; the same steps with
+`false` turn trimming back off.
 
 To run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .`
 from the repository root. No publishing step is required; the marketplace is

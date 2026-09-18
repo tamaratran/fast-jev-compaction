@@ -12,6 +12,7 @@ import type {
   ResolvedCompactOptions,
   ToolCall,
   ToolUse,
+  ArchiveResult,
 } from './types.js';
 
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
@@ -132,12 +133,34 @@ async function askBatch(
   );
 }
 
-function truncatedResultText(text: string, isError: boolean, headChars: number): string {
+function truncatedResultText(
+  text: string,
+  isError: boolean,
+  headChars: number,
+  archivedPath?: string,
+): string {
   if (text.length <= headChars + 120) return text;
   const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : '';
+  const where = archivedPath
+    ? `; full output: ${archivedPath} (Read or grep it if needed)`
+    : '; re-run the tool if needed';
   return `${head}[fast-jev-compaction truncated ${text.length - headChars} chars of this tool result${
     isError ? ' (error)' : ''
-  }; re-run the tool if needed]`;
+  }${where}]`;
+}
+
+/** One line standing in for a dropped call, naming where its output went. */
+function droppedCallNote(tool: ToolUse, archivedPath: string | undefined): string {
+  let input = '';
+  try {
+    input = JSON.stringify(tool.input);
+  } catch {
+    input = '{}';
+  }
+  if (input.length > 160) input = `${input.slice(0, 159)}…`;
+  return `[fast-jev-compaction removed the ${tool.tool} call ${input}${
+    archivedPath ? `; full output: ${archivedPath} (Read or grep it if needed)` : ''
+  }]`;
 }
 
 /**
@@ -151,6 +174,7 @@ export function applyDecisions(
   decisions: readonly CallDecision[],
   calls: readonly ToolCall[],
   headChars: number,
+  archive?: ArchiveResult,
 ): Message[] {
   const byId = new Map(calls.map((call) => [call.id, call]));
   const actions = new Map<string, CallDecision['action']>();
@@ -167,6 +191,11 @@ export function applyDecisions(
       kept.push(message);
       continue;
     }
+    // A dropped call leaves one line naming it and where its output was saved,
+    // so a detail inside it can still be recovered.
+    const notes = message.toolUses
+      .filter((tool) => actions.get(tool.tool_use_id) === 'drop_call')
+      .map((tool) => droppedCallNote(tool, archive?.(tool.tool_use_id, tool.text ?? '')));
     const toolUses = message.toolUses
       .filter((tool) => actions.get(tool.tool_use_id) !== 'drop_call')
       .map((tool) => {
@@ -175,6 +204,7 @@ export function applyDecisions(
           tool.text ?? '',
           tool.isError ?? false,
           headChars,
+          archive?.(tool.tool_use_id, tool.text ?? ''),
         );
         if ((tool.text ?? '') === text) return tool;
         const copy: ToolUse = {
@@ -190,7 +220,12 @@ export function applyDecisions(
       .filter((result) => actions.get(result.tool_use_id) !== 'drop_call')
       .map((result) => {
         if (actions.get(result.tool_use_id) !== 'drop_result') return result;
-        const text = truncatedResultText(result.text, result.isError ?? false, headChars);
+        const text = truncatedResultText(
+          result.text,
+          result.isError ?? false,
+          headChars,
+          archive?.(result.tool_use_id, result.text),
+        );
         return text === result.text
           ? result
           : {
@@ -214,10 +249,11 @@ export function applyDecisions(
       kept.push(message);
       continue;
     }
-    if (message.text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
+    const text = notes.length > 0 ? [message.text, ...notes].filter(Boolean).join('\n') : message.text;
+    if (text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
       continue;
     }
-    const rebuilt: Message = { role: message.role, text: message.text, toolUses };
+    const rebuilt: Message = { role: message.role, text, toolUses };
     if (toolResults.length > 0) rebuilt.toolResults = toolResults;
     kept.push(rebuilt);
   }
@@ -286,6 +322,7 @@ export async function compact(
     decisions,
     calls,
     resolved.truncateHeadChars,
+    options.archive,
   );
   return {
     messages: kept,

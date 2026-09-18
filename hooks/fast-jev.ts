@@ -10,6 +10,8 @@ import type {
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import { goalFromMessages } from '../src/state.js';
+import { trimOutput } from '../src/output.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -20,6 +22,10 @@ import type {
 } from '../src/types.js';
 
 const HOOK_DEFAULTS = {
+  archiveResults: true,
+  bashOutput: false,
+  bashOutputMinChars: 4_000,
+  bashOutputChunkLines: 20,
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
@@ -42,6 +48,10 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  bashOutput: boolean;
+  bashOutputMinChars: number;
+  bashOutputChunkLines: number;
+  archiveResults: boolean;
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
@@ -55,6 +65,11 @@ function optionNumber(options: PluginOptions, key: string, fallback: number): nu
 function optionString(options: PluginOptions, key: string): string | undefined {
   const value = options[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function optionBoolean(options: PluginOptions, key: string, fallback: boolean): boolean {
+  const value = options[key];
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
@@ -72,6 +87,21 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   }
   const config: HookConfig = {
     ...numbers,
+    bashOutput: optionBoolean(options, 'bashOutput', HOOK_DEFAULTS.bashOutput),
+    bashOutputMinChars: optionNumber(
+      options,
+      'bashOutputMinChars',
+      HOOK_DEFAULTS.bashOutputMinChars,
+    ),
+    bashOutputChunkLines: optionNumber(
+      options,
+      'bashOutputChunkLines',
+      HOOK_DEFAULTS.bashOutputChunkLines,
+    ),
+    archiveResults:
+      typeof options.archiveResults === 'boolean'
+        ? options.archiveResults
+        : HOOK_DEFAULTS.archiveResults,
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
     minReductionRatio: optionNumber(
       options,
@@ -166,10 +196,47 @@ export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
+  archive?: ArchiveWriter,
 ): Promise<SessionCompaction> {
   if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), {
+    ...config,
+    ...(archive ? { archive: archive.cite } : {}),
+  });
+  if (archive) await archive.flush();
   return { result, messages: toSessionMessages(messages, result.messages) };
+}
+
+export type ArchiveWriter = {
+  /** Names the file a dropped result will be written to, for its marker. */
+  cite: (toolUseId: string, text: string) => string | undefined;
+  /** Writes the files named so far. */
+  flush: () => Promise<void>;
+};
+
+/**
+ * Saves the tool results compaction drops, so a detail buried in one can be
+ * read back later instead of being lost. Credentials are never written.
+ */
+export function archiveWriter($: {
+  fs: { exists: (path: string) => Promise<boolean>; write: (path: string, text: string) => Promise<void> };
+}): ArchiveWriter {
+  const pending = new Map<string, string>();
+  return {
+    cite(toolUseId, text) {
+      if (!text || looksSecret('', text)) return undefined;
+      const path = `${ARCHIVE_DIR}/result-${toolUseId}.txt`;
+      pending.set(path, text);
+      return path;
+    },
+    async flush() {
+      if (pending.size === 0) return;
+      const ignorePath = `${ARCHIVE_DIR}/.gitignore`;
+      if (!(await $.fs.exists(ignorePath))) await $.fs.write(ignorePath, '*\n');
+      for (const [path, text] of pending) await $.fs.write(path, text);
+      pending.clear();
+    },
+  };
 }
 
 function percent(ratio: number): string {
@@ -190,6 +257,7 @@ export function summarize(result: CompactResult): string {
 }
 
 const UI_LOG_MAX_CHARS = 4096;
+const ARCHIVE_DIR = '.claude/fast-jev-compaction';
 
 export function decisionLog(result: CompactResult): string {
   return result.decisions
@@ -243,6 +311,16 @@ async function getApiKey(
   return undefined;
 }
 
+const SECRET_COMMAND =
+  /(^|[|;&]\s*)(printenv|env)\b|\.env\b|\b(secret|secrets|credential|credentials|password|token|keychain|netrc|id_rsa|private[_-]?key)\b/i;
+const SECRET_OUTPUT =
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(aws_secret_access_key|api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[=:]\s*\S|:\/\/[^\s:@/]+:[^\s:@/]+@/i;
+
+/** True when the command or its output looks like it carries credentials. */
+export function looksSecret(command: string, output: string): boolean {
+  return SECRET_COMMAND.test(command) || SECRET_OUTPUT.test(output.slice(0, 20_000));
+}
+
 function notify(
   $: {
     ui: {
@@ -260,13 +338,83 @@ export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
 
+  if (configured.bashOutput) {
+    on('tool.call', { tool: 'Bash' }, async ($, event, next) => {
+      const answer = await next(event);
+      try {
+        if (answer.deny !== undefined || answer.isError || !answer.result) return answer;
+        const record = answer.result;
+        if ('persistedOutputPath' in record && record.persistedOutputPath) return answer;
+        const combined = record.stdout + (record.stderr ? `\n${record.stderr}` : '');
+        if (combined.length <= configured.bashOutputMinChars) return answer;
+        const apiKey = await getApiKey($, configured);
+        if (!apiKey) return answer;
+        const goal = goalFromMessages(await $.session.messages());
+        // Secrets are never written to disk; such output is still trimmed, but
+        // the marker tells the agent to re-run the command instead of pointing
+        // at a file that would outlive the session.
+        const secret = looksSecret(event.command, combined);
+        const path = secret
+          ? undefined
+          : `${ARCHIVE_DIR}/bash-${event.tool_use_id ?? Date.now()}.txt`;
+        const trimmed = await trimOutput(
+          {
+            command: event.command,
+            goal,
+            output: record.stdout,
+            fullOutputPath: path,
+          },
+          jevAsker(
+            async (url, init) => {
+              const response = await $.http.fetch(url, init);
+              return { status: response.status, ok: response.ok, text: response.text };
+            },
+            apiKey,
+            configured.model,
+          ),
+          {
+            minChars: configured.bashOutputMinChars,
+            chunkLines: configured.bashOutputChunkLines,
+            keepThreshold: configured.keepThreshold,
+            maxStateTokens: configured.maxStateTokens,
+          },
+        );
+        if (!trimmed.trimmed) return answer;
+        // Written only now, so output that ends up untrimmed leaves nothing behind.
+        if (path) {
+          const ignorePath = `${ARCHIVE_DIR}/.gitignore`;
+          if (!(await $.fs.exists(ignorePath))) await $.fs.write(ignorePath, '*\n');
+          await $.fs.write(path, combined);
+        }
+        const scores = trimmed.scores.map((score) => score.toFixed(2)).join(',');
+        $.ui.log(
+          `bash output: kept ${trimmed.kept}/${trimmed.chunks} chunks (${trimmed.charsBefore}→${trimmed.charsAfter} chars) scores=${scores}`,
+        );
+        $.ui.toast(
+          `trimmed Bash output ${trimmed.charsBefore}→${trimmed.charsAfter} chars`,
+          { timeoutMs: 8_000 },
+        );
+        return { result: { ...record, stdout: trimmed.output } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        $.ui.log(`bash output trim skipped (${message})`);
+        return answer;
+      }
+    });
+  }
+
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
-        return { status: response.status, ok: response.ok, text: response.text };
-      });
+      const { result, messages } = await compactSession(
+        event.messages,
+        config,
+        async (url, init) => {
+          const response = await $.http.fetch(url, init);
+          return { status: response.status, ok: response.ok, text: response.text };
+        },
+        config.archiveResults ? archiveWriter($) : undefined,
+      );
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(

@@ -1,3 +1,5 @@
+export type ArchiveResult = (toolUseId: string, text: string) => string | undefined;
+
 export type Role = 'user' | 'assistant';
 
 /**
@@ -93,6 +95,8 @@ export interface FittedState {
 }
 
 export interface CompactOptions {
+  /** Called for each dropped tool result; returns a path to cite in its marker. */
+  archive?: ArchiveResult;
   /** Ongoing task description; defaults to the last few user prompts. */
   goal?: string;
   /** Minimum keep probability for a call or result to stay. Default 0.5. */
