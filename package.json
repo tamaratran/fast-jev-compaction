@@ -4,8 +4,19 @@
   "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model.",
   "type": "module",
   "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "context-compaction",
+    "jev"
+  ],
   "engines": {
     "node": ">=18"
+  },
+  "pi": {
+    "extensions": [
+      "./pi/extension.ts"
+    ]
   },
   "exports": {
     ".": {
@@ -15,18 +26,24 @@
   },
   "files": [
     "dist",
+    "src",
+    "pi",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit && npm run typecheck:hooks",
+    "typecheck": "tsc --noEmit && npm run typecheck:hooks && npm run typecheck:pi",
     "test": "vitest run",
     "demo": "tsx examples/demo.ts",
     "typecheck:hooks": "tsc -p tsconfig.hooks.json",
+    "typecheck:pi": "tsc -p tsconfig.pi.json",
+    "smoke:pi": "node scripts/smoke-pi.mjs",
     "validate:plugin": "claude plugin validate .claude-plugin/plugin.json"
   },
   "devDependencies": {
+    "@earendil-works/pi-agent-core": "~0.85.1",
+    "@earendil-works/pi-coding-agent": "~0.85.1",
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

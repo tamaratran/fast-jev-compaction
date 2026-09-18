@@ -1,9 +1,8 @@
 # fast-jev-compaction
 
-Claude Code plugin that replaces the compaction summary with Jev decisions:
-every tool call and result is scored in one fast request, stale ones are
-dropped or truncated, everything kept stays verbatim. Also usable as an npm
-library.
+Claude Code plugin and Pi package that use Jev decisions to remove or truncate
+stale tool calls and results while keeping everything else verbatim. Also
+usable as an npm library.
 
 ## What and why
 
@@ -124,6 +123,142 @@ stage was needed, and the number of requests.
   result is safe to delete. The assistant can always re-run the tool.
 - The full state is repeated with every request, so a history near the state
   ceiling costs one request per handful of questions.
+
+## Pi extension
+
+The Pi package exposes `pi/extension.ts` through its `package.json` manifest.
+It runs Jev at Pi's compaction boundary, not before every model request. The
+adapter uses the same paired-call decisions and first/recent-message pinning as
+the core compactor, then applies those decisions to Pi's typed messages.
+
+`/compact`, `/jev compact`, and `/jev prune` all request the same Pi
+compaction path. The extension also asks Pi to compact after a settled turn
+when context reaches 60% by default. Pi's own threshold compaction and
+overflow recovery flow through that same `session_before_compact` hook.
+
+Jev replaces Pi's summary only when scoring succeeds and removes at least 25%
+of the projected character count. A missing key, malformed response, request
+failure, host capacity gate, or smaller reduction leaves Pi's native summary
+in control. Cancellation stays a normal Pi cancellation; it is not converted
+into a Jev or native summary.
+
+The resulting compaction entry stores typed retained messages in `details` and
+a complete deterministic retained-text rendering in its required summary. The
+`context` hook only restores a committed checkpoint; it never scores or
+revisits old decisions. Original messages remain in the prior JSONL entries,
+so `/tree` can return to the point before compaction. Existing checkpoints
+continue to restore even after `/jev off`.
+
+Pi prepares compaction before calling extension hooks. Version 2 checkpoints
+therefore leave a bounded window of source entries addressable to that
+preparation, so another `/compact` can still reach Jev after a short new turn.
+The context hook replaces that entire window with the retained typed snapshot;
+source messages are not appended to the model's context a second time. Pi's
+raw entry-size estimates can include this window; `/jev status` reports the
+effective projection, and subsequent provider usage measures the actual request.
+
+Before native fallback, the adapter supplies the retained checkpoint and only
+the new prefix to Pi's summarizer. This also applies while Jev is disabled and
+when Pi splits the first turn after a checkpoint, preventing the previous
+context from being omitted. Existing version 1 checkpoints remain readable.
+
+Every unique, ordered tool-call/result pair is a core candidate, including
+errors, image-bearing results, and tool-discovery results. Visible assistant
+text and message metadata survive edits. If removing calls leaves an assistant
+row with no visible text or remaining calls, that row is removed with its now
+orphaned reasoning/signature blocks, matching the native empty-row rule and
+avoiding a Responses reasoning-only item.
+
+### Privacy and API data
+
+Jev receives projected visible conversation text, Pi compaction and branch
+summary text, non-excluded `!` bash commands and output, plus tool names and
+arguments. Tool-result bodies are represented as status/length notes in the
+Jev state. Image payload bytes are never sent; the projection uses count
+placeholders. A `!!` execution marked `excludeFromContext` is omitted. Set
+`TYPESAFE_API_KEY` only if the remaining projected text, summaries, commands,
+and tool arguments may be sent to TypeSafe.
+
+Reduction shown by `/jev status` is based on the core projection. It is an
+estimate for compaction eligibility, not a tokenizer or response-time metric.
+
+### Install
+
+The npm library supports Node 18 and newer. Pi 0.85.1 requires Node 22.19 or
+newer, so use that version when loading the Pi extension.
+
+After this change is merged upstream:
+
+```sh
+pi install git:github.com/tamaratran/fast-jev-compaction
+```
+
+To run the extension directly from a local checkout:
+
+```sh
+pi -e ./pi/extension.ts
+```
+
+To install the fork branch before the upstream merge:
+
+```sh
+pi install git:github.com/MiguelMachado-dev/fast-jev-compaction@feat/pi-extension
+```
+
+Set `TYPESAFE_API_KEY` in the environment that starts Pi. Without a key the
+extension lets Pi produce its native summary and `/jev status` reports the
+missing key.
+
+For an interactive Windows check with the user's existing `openai-codex`
+authentication and `gpt-6-astra` at `xhigh`, use:
+
+```powershell
+.\scripts\test-pi.ps1
+```
+
+The launcher prompts securely for `TYPESAFE_API_KEY` only when it is absent,
+passes it only to its Pi child process, and writes no configuration. It starts
+Pi without an initial prompt. To print a reproducible read-only test prompt
+without starting a model request, run:
+
+```powershell
+.\scripts\test-pi.ps1 -ShowCompactionPrompt
+```
+
+Paste that prompt into Pi, wait for the explanation, then enter `/compact`.
+The expected outcome is either a Jev checkpoint with at least 25% projected
+reduction or Pi's normal summary fallback.
+
+### Configuration
+
+Pi loads these extension flags from the command line:
+
+| Flag | Default | Meaning |
+| --- | ---: | --- |
+| `--jev-compact-at-percent` | `60` | Context percentage that queues compaction after a settled turn. |
+| `--jev-min-reduction-ratio` | `0.25` | Minimum projected character reduction needed to replace Pi's summary. |
+| `--jev-keep-threshold` | `0.5` | Minimum probability required to keep a call or full result. |
+| `--jev-preserve-recent` | `6` | Newest message rows pinned by the core compactor. |
+| `--jev-max-state-tokens` | `25000` | Estimated Jev state budget. |
+| `--jev-max-request-tokens` | `30000` | Estimated Jev request budget. |
+| `--jev-truncate-head-chars` | `300` | Characters retained before a truncated result marker. |
+| `--jev-timeout-ms` | `0` | Optional scoring deadline in milliseconds; `0` disables this extra deadline. |
+| `--jev-model` | `jev-latest` | TypeSafe model used for scoring. |
+| `--jev-disabled` | `false` | Starts the extension disabled. |
+
+For example: `pi --jev-compact-at-percent 70 --jev-preserve-recent 8`.
+
+Use the `/jev` command inside Pi:
+
+| Command | Effect |
+| --- | --- |
+| `/jev status` | Shows Jev/native status, key state, automatic threshold, and minimum reduction. |
+| `/jev decisions` | Shows the latest core decisions and probabilities. |
+| `/jev compact` / `/jev prune` | Requests the same Pi compaction path as `/compact`. |
+| `/jev on` / `/jev off` | Enables or disables future Jev scoring; committed checkpoints still restore. |
+
+Use `/tree` to navigate to the pre-checkpoint entry when you need the original
+uncompacted branch context.
 
 ## Claude Code plugin
 
