@@ -61,6 +61,8 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 ```sh
 npm install fast-jev-compaction
 export TYPESAFE_API_KEY=...
+# or, to call Jev through Vercel AI Gateway instead:
+export AI_GATEWAY_API_KEY=...
 ```
 
 ```ts
@@ -93,16 +95,22 @@ method) and call `compact(messages, asker, options)`; `buildJevRequest` and
 The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
 `decideCall`, `applyDecisions`) are exported too.
 
-`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
+`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Set
+`provider: 'vercel-ai-gateway'` (or only `AI_GATEWAY_API_KEY`) to send the
+same Jev questions through [Vercel AI Gateway](https://vercel.com/ai-gateway/models/jev)
+instead of TypeSafe's System One endpoint. Gateway evaluation does not accept
+TypeSafe's `noul` question type, so the client maps those questions to
+`boolean` and reads `probability` as the keep score. Never commit a key or
 put it in a source file.
 
 ## Options
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
-| `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
+| `apiKey` | `TYPESAFE_API_KEY` or `AI_GATEWAY_API_KEY` | Key for the selected provider (`compactMessages`/`JevClient`) |
+| `provider` | `typesafe` (or `vercel-ai-gateway` when only `AI_GATEWAY_API_KEY` is set) | `typesafe` or `vercel-ai-gateway` |
+| `model` | `jev-latest` | Jev model name. On the Gateway, `jev` and `jev-latest` map to `typesafe-ai/jev` |
+| `baseUrl` | System One or `https://ai-gateway.vercel.sh/v4/ai/evaluation-model` | Endpoint for the selected provider |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
@@ -142,6 +150,13 @@ opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.j
 { "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1", "TYPESAFE_API_KEY": "<your key>" } }
 ```
 
+To use Vercel AI Gateway instead of a TypeSafe key, set `AI_GATEWAY_API_KEY`
+(and optionally the plugin `provider` option to `vercel-ai-gateway`):
+
+```json
+{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1", "AI_GATEWAY_API_KEY": "<your gateway key>" } }
+```
+
 Then add this repository as a plugin marketplace and install the plugin,
 either from the shell or as slash commands inside a session:
 
@@ -150,8 +165,10 @@ claude plugin marketplace add tamaratran/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
 
-The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
-…); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
+The install prompts for the plugin options (API key, provider, thresholds,
+`truncateHeadChars`, …); leave them at their defaults to use `TYPESAFE_API_KEY`
+or `AI_GATEWAY_API_KEY` from the environment. A plugin `apiKey` that starts
+with `vck_` is treated as a Gateway key when `provider` is unset.
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
 auto-compaction) goes through Jev: the toast reads
 `fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
@@ -171,10 +188,11 @@ npm test
 npm run build
 npm run validate:plugin  # claude plugin validate
 TYPESAFE_API_KEY="$(cat ~/.typesafe_key)" npm run demo
+# or: AI_GATEWAY_API_KEY="$(cat ~/.ai_gateway_key)" npm run demo
 ```
 
-The unit tests use a fake Jev and never contact TypeSafe. The demo is the live
-network check.
+The unit tests use a fake Jev and never contact TypeSafe or the Vercel AI
+Gateway. The demo is the live network check.
 
 ## Animated demo (macOS)
 

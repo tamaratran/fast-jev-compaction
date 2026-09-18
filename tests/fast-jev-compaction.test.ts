@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyDecisions,
   batchCalls,
@@ -10,9 +10,14 @@ import {
   estimateTokens,
   fitState,
   JevClient,
+  noulAnswer,
+  parseJevProvider,
   parseJevResponse,
   reductionRatio,
+  resolveGatewayModel,
+  resolveJevTransport,
   resolveOptions,
+  toGatewayQuestions,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -395,7 +400,10 @@ describe('HTTP client', () => {
       q: { type: 'noul', instructions: 'x' },
     });
     expect(request.url).toBe('https://api.typesafe.ai/v1/systemone');
-    expect(request.headers.authorization).toBe('Bearer k');
+    expect(request.headers).toEqual({
+      authorization: 'Bearer k',
+      'content-type': 'application/json',
+    });
     expect(JSON.parse(request.body)).toEqual({
       model: 'jev-latest',
       state: { a: 1 },
@@ -429,5 +437,175 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('Vercel AI Gateway', () => {
+  const noulQuestions: JevQuestions = {
+    call_t1: { type: 'noul', instructions: 'keep the call', criteria: { true: 'yes', false: 'no' } },
+    result_t1: { type: 'noul', instructions: 'keep the result' },
+    route: {
+      type: 'choice',
+      instructions: 'pick',
+      criteria: { a: 'A', b: null },
+    },
+  };
+
+  const env = {
+    TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY,
+    AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY,
+  };
+
+  afterEach(() => {
+    if (env.TYPESAFE_API_KEY === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = env.TYPESAFE_API_KEY;
+    if (env.AI_GATEWAY_API_KEY === undefined) delete process.env.AI_GATEWAY_API_KEY;
+    else process.env.AI_GATEWAY_API_KEY = env.AI_GATEWAY_API_KEY;
+  });
+
+  it('parses provider aliases and rejects unknown values', () => {
+    expect(parseJevProvider(undefined)).toBeUndefined();
+    expect(parseJevProvider('')).toBeUndefined();
+    expect(parseJevProvider('typesafe')).toBe('typesafe');
+    expect(parseJevProvider('vercel-ai-gateway')).toBe('vercel-ai-gateway');
+    expect(parseJevProvider('Gateway')).toBe('vercel-ai-gateway');
+    expect(parseJevProvider('ai-gateway')).toBe('vercel-ai-gateway');
+    expect(() => parseJevProvider('openai')).toThrow(/Unknown Jev provider/);
+  });
+
+  it('prefixes unprefixed Gateway model ids', () => {
+    expect(resolveGatewayModel()).toBe('typesafe-ai/jev');
+    expect(resolveGatewayModel('jev-latest')).toBe('typesafe-ai/jev');
+    expect(resolveGatewayModel('jev')).toBe('typesafe-ai/jev');
+    expect(resolveGatewayModel('typesafe-ai/jev')).toBe('typesafe-ai/jev');
+    expect(resolveGatewayModel('typesafe-ai/jev-latest')).toBe('typesafe-ai/jev');
+    expect(resolveGatewayModel('jev-1.13.0')).toBe('typesafe-ai/jev-1.13.0');
+  });
+
+  it('maps noul questions to boolean and leaves other types alone', () => {
+    expect(toGatewayQuestions(noulQuestions)).toEqual({
+      call_t1: {
+        type: 'boolean',
+        instructions: 'keep the call',
+        criteria: { true: 'yes', false: 'no' },
+      },
+      result_t1: { type: 'boolean', instructions: 'keep the result' },
+      route: {
+        type: 'choice',
+        instructions: 'pick',
+        criteria: { a: 'A', b: null },
+      },
+    });
+  });
+
+  it('builds the Gateway evaluation request, not System One', () => {
+    const request = buildJevRequest(
+      { apiKey: 'vck_test', provider: 'vercel-ai-gateway', model: 'jev-latest' },
+      { a: 1 },
+      { q: { type: 'noul', instructions: 'x' } },
+    );
+    expect(request.url).toBe('https://ai-gateway.vercel.sh/v4/ai/evaluation-model');
+    expect(request.headers).toEqual({
+      authorization: 'Bearer vck_test',
+      'content-type': 'application/json',
+      'ai-evaluation-model-specification-version': '4',
+      'ai-model-id': 'typesafe-ai/jev',
+      'ai-gateway-protocol-version': '0.0.1',
+      'ai-gateway-auth-method': 'api-key',
+    });
+    expect(JSON.parse(request.body)).toEqual({
+      state: { a: 1 },
+      questions: { q: { type: 'boolean', instructions: 'x' } },
+    });
+    expect(JSON.parse(request.body).model).toBeUndefined();
+  });
+
+  it('reads keep probabilities from noul and from Gateway boolean answers', () => {
+    expect(noulAnswer({ q: { type: 'noul', noul: 0.4 } }, 'q')).toBe(0.4);
+    expect(noulAnswer({ q: { type: 'boolean', probability: 0.91 } }, 'q')).toBe(0.91);
+    expect(() => noulAnswer({ q: { type: 'choice', choice: 'a', confidence: 1, probabilities: { a: 1 } } }, 'q')).toThrow(
+      /Invalid Jev answer/,
+    );
+  });
+
+  it('selects TypeSafe when both keys exist and Gateway when only the Gateway key exists', () => {
+    delete process.env.TYPESAFE_API_KEY;
+    delete process.env.AI_GATEWAY_API_KEY;
+    expect(resolveJevTransport()).toEqual({ provider: 'typesafe', apiKey: '' });
+
+    process.env.AI_GATEWAY_API_KEY = 'gw';
+    expect(resolveJevTransport()).toEqual({ provider: 'vercel-ai-gateway', apiKey: 'gw' });
+
+    process.env.TYPESAFE_API_KEY = 'ts';
+    expect(resolveJevTransport()).toEqual({ provider: 'typesafe', apiKey: 'ts' });
+    expect(resolveJevTransport({ provider: 'vercel-ai-gateway' })).toEqual({
+      provider: 'vercel-ai-gateway',
+      apiKey: 'gw',
+    });
+    expect(resolveJevTransport({ apiKey: 'explicit' })).toEqual({
+      provider: 'typesafe',
+      apiKey: 'explicit',
+    });
+    expect(resolveJevTransport({ apiKey: 'vck_test' })).toEqual({
+      provider: 'vercel-ai-gateway',
+      apiKey: 'vck_test',
+    });
+    expect(resolveJevTransport({ apiKey: 'explicit', provider: 'gateway' })).toEqual({
+      provider: 'vercel-ai-gateway',
+      apiKey: 'explicit',
+    });
+  });
+
+  it('asks the Gateway over fetch and accepts boolean probabilities', async () => {
+    delete process.env.TYPESAFE_API_KEY;
+    process.env.AI_GATEWAY_API_KEY = 'gw';
+    const seen: { url: string; headers: Headers; body: string }[] = [];
+    const client = new JevClient({
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        seen.push({
+          url: String(url),
+          headers: new Headers(init?.headers),
+          body: String(init?.body),
+        });
+        return new Response(
+          JSON.stringify({ answers: { q: { type: 'boolean', probability: 0.88 } } }),
+          { status: 200 },
+        );
+      }) as typeof fetch,
+    });
+    const response = await client.ask('state', { q: { type: 'noul', instructions: 'x' } });
+    expect(noulAnswer(response.answers, 'q')).toBe(0.88);
+    expect(seen[0]?.url).toBe('https://ai-gateway.vercel.sh/v4/ai/evaluation-model');
+    expect(seen[0]?.headers.get('ai-model-id')).toBe('typesafe-ai/jev');
+    expect(JSON.parse(seen[0]!.body)).toEqual({
+      state: 'state',
+      questions: { q: { type: 'boolean', instructions: 'x' } },
+    });
+
+    const keyless = new JevClient({ apiKey: '', provider: 'vercel-ai-gateway' });
+    await expect(keyless.ask('s', {})).rejects.toThrow(/AI_GATEWAY_API_KEY/);
+  });
+
+  it('compacts through the Gateway client using boolean answers', async () => {
+    const client = new JevClient({
+      apiKey: 'gw',
+      provider: 'vercel-ai-gateway',
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        const { questions } = JSON.parse(String(init?.body)) as {
+          questions: Record<string, { type: string }>;
+        };
+        expect(Object.values(questions).every((q) => q.type === 'boolean')).toBe(true);
+        const answers = Object.fromEntries(
+          Object.keys(questions).map((key) => [
+            key,
+            { type: 'boolean', probability: key.startsWith('call_') ? 0.9 : 0.1 },
+          ]),
+        );
+        return new Response(JSON.stringify({ answers }), { status: 200 });
+      }) as typeof fetch,
+    });
+    const output = await compact(transcript(), client, { preserveRecentMessages: 1 });
+    expect(output.decisions.every((d) => d.action === 'drop_result')).toBe(true);
+    expect(output.stats.resultsDropped).toBeGreaterThan(0);
   });
 });

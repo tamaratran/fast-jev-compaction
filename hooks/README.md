@@ -3,10 +3,10 @@
 This plugin uses Claude Code function hooks to replace a compaction with the
 original messages, minus the tool calls and tool results Jev judged no longer
 needed. `hooks/fast-jev.ts` is a thin adapter: it reads the plugin options,
-finds the TypeSafe key, hands `session.compact` transcripts to the
-`fast-jev-compaction` library in `src/` (the plugin folder is the repository
-root, so the hook imports it directly) and maps the result back onto session
-messages. User and assistant text is never touched. Jev is sent the whole
+finds the TypeSafe or Vercel AI Gateway key, hands `session.compact`
+transcripts to the `fast-jev-compaction` library in `src/` (the plugin folder
+is the repository root, so the hook imports it directly) and maps the result
+back onto session messages. User and assistant text is never touched. Jev is sent the whole
 conversation as `state` (tool outputs replaced by a one-line note) and, for
 every tool call outside the pinned first and newest messages, two questions:
 whether the call should stay and whether its full output should stay. An
@@ -30,6 +30,7 @@ hooks surface before installing or loading it:
 ```sh
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
 export TYPESAFE_API_KEY="<your TypeSafe key>"
+# or: export AI_GATEWAY_API_KEY="<your Vercel AI Gateway key>"
 
 claude plugin marketplace add tamaratran/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
@@ -56,14 +57,19 @@ The plugin declares these `userConfig` values in
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
+| `provider` | *(unset)* |
 
-The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
-through `TYPESAFE_API_KEY`. The environment variable is the recommended
+The key can be supplied as the sensitive `apiKey` plugin option, through
+`TYPESAFE_API_KEY`, or through `AI_GATEWAY_API_KEY`. Set `provider` to
+`vercel-ai-gateway` to force the Gateway; if it is unset, TypeSafe is used
+when a TypeSafe key is present, otherwise the Gateway is used when
+`AI_GATEWAY_API_KEY` is present. The environment variable is the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
+Every option except `apiKey`, `provider`, `compactAtPercent`,
+`minReductionRatio` and `model` is passed straight to the library; see the
+root README for what they do. A plugin `apiKey` that starts with `vck_` is
+treated as a Gateway key when `provider` is unset. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
 fitted into the state budget, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's

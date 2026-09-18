@@ -4,6 +4,7 @@ import {
   decisionLog,
   decisionLogLines,
   resolveHookConfig,
+  resolveHookTransport,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
@@ -64,6 +65,50 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+    });
+    expect(resolveHookConfig({ provider: 'vercel-ai-gateway' })).toMatchObject({
+      provider: 'vercel-ai-gateway',
+      model: 'jev-latest',
+    });
+    expect(resolveHookConfig({ provider: 'gateway' }).provider).toBe('vercel-ai-gateway');
+    expect(() => resolveHookConfig({ provider: 'openai' })).toThrow(/Unknown Jev provider/);
+  });
+
+  it('infers the Gateway from AI_GATEWAY_API_KEY when TypeSafe is unset', () => {
+    const base = resolveHookConfig({});
+    expect(resolveHookTransport(base, { aiGatewayApiKey: 'gw' })).toEqual({
+      ...base,
+      provider: 'vercel-ai-gateway',
+      apiKey: 'gw',
+    });
+    expect(resolveHookTransport(base, { typesafeApiKey: 'ts', aiGatewayApiKey: 'gw' })).toEqual({
+      ...base,
+      provider: 'typesafe',
+      apiKey: 'ts',
+    });
+    expect(
+      resolveHookTransport(
+        { ...base, provider: 'vercel-ai-gateway' },
+        { typesafeApiKey: 'ts', aiGatewayApiKey: 'gw' },
+      ),
+    ).toEqual({
+      ...base,
+      provider: 'vercel-ai-gateway',
+      apiKey: 'gw',
+    });
+    expect(resolveHookTransport({ ...base, apiKey: 'plugin' }, { aiGatewayApiKey: 'gw' })).toEqual({
+      ...base,
+      provider: 'typesafe',
+      apiKey: 'plugin',
+    });
+    expect(resolveHookTransport({ ...base, apiKey: 'vck_plugin' }, { typesafeApiKey: 'ts' })).toEqual({
+      ...base,
+      provider: 'vercel-ai-gateway',
+      apiKey: 'vck_plugin',
+    });
+    expect(resolveHookTransport({ ...base, provider: 'typesafe' }, { aiGatewayApiKey: 'gw' })).toEqual({
+      ...base,
+      provider: 'typesafe',
     });
   });
 });
@@ -145,5 +190,36 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+    await expect(
+      compactSession(transcript(), { ...config, provider: 'vercel-ai-gateway' }, jevFetch(() => 0)),
+    ).rejects.toThrow(/AI_GATEWAY_API_KEY/);
+  });
+
+  it('sends Gateway evaluation requests and reads boolean probabilities', async () => {
+    const captured: { url: string; headers?: Record<string, string>; body: string }[] = [];
+    const config = {
+      ...resolveHookConfig({ preserveRecentMessages: 1, provider: 'vercel-ai-gateway', model: 'jev-latest' }),
+      apiKey: 'gw',
+    };
+    const { result: output } = await compactSession(transcript(), config, async (url, init) => {
+      captured.push({ url, headers: init?.headers, body: init?.body ?? '' });
+      const { questions } = JSON.parse(init?.body ?? '{}') as { questions: Record<string, { type: string }> };
+      const answers = Object.fromEntries(
+        Object.keys(questions).map((key) => [
+          key,
+          { type: 'boolean', probability: key === 'call_t2' || key === 'result_t2' ? 0.9 : 0.1 },
+        ]),
+      );
+      return { status: 200, ok: true, text: JSON.stringify({ answers }) };
+    });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.url).toBe('https://ai-gateway.vercel.sh/v4/ai/evaluation-model');
+    expect(captured[0]?.headers?.['ai-model-id']).toBe('typesafe-ai/jev');
+    expect(JSON.parse(captured[0]!.body).questions.call_t1).toEqual({
+      type: 'boolean',
+      instructions: expect.stringContaining('Tool call t1'),
+    });
+    expect(JSON.parse(captured[0]!.body).model).toBeUndefined();
+    expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
   });
 });

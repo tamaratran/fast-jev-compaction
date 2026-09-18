@@ -1,14 +1,24 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "author": {
+    "name": "tamaratran",
+    "url": "https://github.com/tamaratran/fast-jev-compaction"
+  },
   "license": "MIT",
   "userConfig": {
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "title": "API key",
+      "description": "API key for the selected provider. A vck_ key selects Vercel AI Gateway when provider is unset. Leave unset to use TYPESAFE_API_KEY or AI_GATEWAY_API_KEY.",
       "sensitive": true
+    },
+    "provider": {
+      "type": "string",
+      "title": "Jev provider",
+      "description": "typesafe (default) or vercel-ai-gateway. Leave unset to use TypeSafe when TYPESAFE_API_KEY is set, otherwise Vercel AI Gateway when AI_GATEWAY_API_KEY is set.",
+      "default": ""
     },
     "keepThreshold": {
       "type": "number",
@@ -55,7 +65,7 @@
     "model": {
       "type": "string",
       "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
+      "description": "Jev model name. TypeSafe default is jev-latest. On Vercel AI Gateway, jev and jev-latest map to typesafe-ai/jev.",
       "default": "jev-latest"
     }
   }

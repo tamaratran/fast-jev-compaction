@@ -165,9 +165,18 @@ export interface ScoreQuestion {
 export type JevQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 export type JevQuestions = Record<string, JevQuestion>;
 
+/** Direct TypeSafe System One, or Jev via Vercel AI Gateway. */
+export type JevProvider = 'typesafe' | 'vercel-ai-gateway';
+
 export interface NoulAnswer {
   type?: 'noul';
   noul: number;
+}
+
+/** AI Gateway evaluation `boolean` answer; same probability as TypeSafe `noul`. */
+export interface BooleanAnswer {
+  type: 'boolean';
+  probability: number;
 }
 
 export interface ChoiceAnswer {
@@ -184,7 +193,7 @@ export interface ScoreAnswer {
   probabilities: Record<string, number>;
 }
 
-export type JevAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
+export type JevAnswer = NoulAnswer | BooleanAnswer | ChoiceAnswer | ScoreAnswer;
 
 export interface JevResponse {
   model?: string;

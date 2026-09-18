@@ -9,11 +9,19 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
-import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import {
+  buildJevRequest,
+  DEFAULT_MODEL,
+  looksLikeGatewayKey,
+  missingJevKeyError,
+  parseJevProvider,
+  parseJevResponse,
+} from '../src/request.js';
 import type {
   CompactOptions,
   CompactResult,
   JevAsker,
+  JevProvider,
   Message,
   ToolResult,
   ToolUse,
@@ -42,6 +50,7 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  provider?: JevProvider;
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
@@ -84,14 +93,49 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
+  const provider = parseJevProvider(optionString(options, 'provider'));
+  if (provider) config.provider = provider;
   return config;
 }
 
+/**
+ * Fills in `provider` and `apiKey` from plugin options plus environment.
+ * TypeSafe wins when both keys are present and `provider` is unset.
+ */
+export function resolveHookTransport(
+  config: HookConfig,
+  env: { typesafeApiKey?: string; aiGatewayApiKey?: string } = {},
+): HookConfig {
+  const provider =
+    config.provider ??
+    (config.apiKey
+      ? looksLikeGatewayKey(config.apiKey)
+        ? 'vercel-ai-gateway'
+        : 'typesafe'
+      : env.typesafeApiKey
+        ? 'typesafe'
+        : env.aiGatewayApiKey
+          ? 'vercel-ai-gateway'
+          : 'typesafe');
+  const apiKey =
+    config.apiKey ??
+    (provider === 'vercel-ai-gateway' ? env.aiGatewayApiKey : env.typesafeApiKey);
+  const resolved: HookConfig = { ...config, provider };
+  if (apiKey) resolved.apiKey = apiKey;
+  else delete resolved.apiKey;
+  return resolved;
+}
+
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  provider?: JevProvider,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, provider }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -167,8 +211,13 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const provider = config.provider ?? 'typesafe';
+  if (!config.apiKey) throw new Error(missingJevKeyError(provider));
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, config.apiKey, config.model, provider),
+    config,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -224,20 +273,14 @@ export function decisionLogLines(
   );
 }
 
-async function getApiKey(
-  $: {
-    env: { get: (name: string) => Promise<string | undefined> };
-    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
-  },
-  config: HookConfig,
+async function envFromSettings(
+  $: { settings: { read: () => Promise<Readonly<Record<string, unknown>>> } },
+  name: 'TYPESAFE_API_KEY' | 'AI_GATEWAY_API_KEY',
 ): Promise<string | undefined> {
-  if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
-  if (fromEnv) return fromEnv;
   const settings = await $.settings.read();
   const env = settings['env'];
   if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
+    const value = (env as Record<string, unknown>)[name];
     if (typeof value === 'string' && value) return value;
   }
   return undefined;
@@ -262,7 +305,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const config = resolveHookTransport(configured, {
+        typesafeApiKey:
+          (await $.env.get('TYPESAFE_API_KEY')) ??
+          (await envFromSettings($, 'TYPESAFE_API_KEY')),
+        aiGatewayApiKey:
+          (await $.env.get('AI_GATEWAY_API_KEY')) ??
+          (await envFromSettings($, 'AI_GATEWAY_API_KEY')),
+      });
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
