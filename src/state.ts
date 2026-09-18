@@ -64,8 +64,16 @@ export function collectToolCalls(
   preserveRecentMessages: number,
 ): ToolCall[] {
   const results = new Map<string, { index: number; result: ToolResult }>();
+  const uses = new Set<string>();
+  for (const message of messages) {
+    for (const tool of message.toolUses) {
+      if (uses.has(tool.tool_use_id)) throw new Error(`Duplicate tool_use_id: ${tool.tool_use_id}`);
+      uses.add(tool.tool_use_id);
+    }
+  }
   messages.forEach((message, index) => {
     for (const result of message.toolResults ?? []) {
+      if (results.has(result.tool_use_id)) throw new Error(`Duplicate tool_result: ${result.tool_use_id}`);
       results.set(result.tool_use_id, { index, result });
     }
   });
@@ -74,6 +82,7 @@ export function collectToolCalls(
     for (const tool of message.toolUses) {
       const found = results.get(tool.tool_use_id);
       if (!found) continue;
+      if (found.index < callIndex) throw new Error(`Tool result precedes its call: ${tool.tool_use_id}`);
       calls.push({
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
