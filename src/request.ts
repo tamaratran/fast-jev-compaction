@@ -35,6 +35,10 @@ export function buildJevRequest(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 /** Validates a Jev response body; throws on anything but an `answers` object. */
 export function parseJevResponse(
   status: number,
@@ -50,13 +54,7 @@ export function parseJevResponse(
   } catch {
     throw new Error('Jev returned malformed JSON');
   }
-  if (
-    parsed === null ||
-    typeof parsed !== 'object' ||
-    !('answers' in parsed) ||
-    parsed.answers === null ||
-    typeof parsed.answers !== 'object'
-  ) {
+  if (!isRecord(parsed) || !isRecord(parsed.answers)) {
     throw new Error('Jev response is missing answers');
   }
   return parsed as JevResponse;
@@ -67,12 +65,16 @@ export function noulAnswer(
   answers: Record<string, JevAnswer>,
   name: string,
 ): number {
-  const answer = answers[name];
+  const answer: unknown = isRecord(answers) && Object.hasOwn(answers, name)
+    ? answers[name]
+    : undefined;
   if (
-    !answer ||
-    !('noul' in answer) ||
+    !isRecord(answer) ||
+    !Object.hasOwn(answer, 'noul') ||
+    (answer.type !== undefined && answer.type !== 'noul') ||
     typeof answer.noul !== 'number' ||
-    !Number.isFinite(answer.noul)
+    !Number.isFinite(answer.noul) ||
+    answer.noul < 0 || answer.noul > 1
   ) {
     throw new Error(`Invalid Jev answer for ${name}`);
   }
