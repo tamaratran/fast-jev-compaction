@@ -76,6 +76,8 @@ export interface HistoryEntry {
   text: string;
   /** Structured per call, or one compact line per call once the state has to shrink. */
   tool_calls?: HistoryToolCall[] | string[];
+  /** Calls without a paired result: context only, never deletion candidates. */
+  pending_calls?: { tool_use_id: string; tool: string; input: string }[];
 }
 
 /** The state sent with every Jev request: the whole history, results omitted. */
@@ -103,6 +105,8 @@ export interface CompactOptions {
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
   maxRequestTokens?: number;
+  /** Maximum concurrent Jev requests. Default 4. Already-running requests settle on failure. */
+  maxConcurrentRequests?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
 }
@@ -113,6 +117,7 @@ export interface ResolvedCompactOptions {
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;
+  maxConcurrentRequests: number;
   truncateHeadChars: number;
 }
 
