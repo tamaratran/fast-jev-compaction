@@ -53,8 +53,16 @@ built-in compaction summary with the original messages.
    removed, untouched messages are returned as the same objects, and no result
    is ever left without its call.
 
-Jev failures, malformed answers, a missing key, or a history that cannot be
-fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
+A 429, a 5xx or a failed fetch (`JevTransportError`, unless it was an abort or
+an unparsable URL) is retried (`retries` times, with a tripling delay). A batch
+is all-or-nothing: one missing or malformed answer fails the batch (a
+`JevResponseError` naming the questions). By default (`onBatchFailure: 'throw'`)
+any failed batch rejects the whole compaction, the actionable error first (a bad
+key over a hiccup), so the caller can fall back. With `onBatchFailure: 'keep'`
+every batch runs to completion, a batch that outlived its retries or came back
+malformed keeps its calls whole and is counted in `stats.failedBatches`, and the
+other batches' answers apply; a 4xx other than 429, an abort, a missing key or a
+history that cannot be fitted still throw in both modes.
 
 ## Install and usage
 
@@ -110,6 +118,10 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `retries` | `2` | Further attempts per request after a 429, a 5xx or a `JevTransportError` (a throwing fetch); nothing else is retried |
+| `retryDelayMs` | `500` | Wait before the first retry, tripled on each further one |
+| `onBatchFailure` | `throw` | `throw` rejects the compaction when a batch fails after its retries; `keep` leaves a batch that timed out or came back malformed whole and applies the rest (a 4xx or an abort still throws) |
+| `sleep` | `setTimeout` | Injectable wait between retries, for hosts without a timer |
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting
@@ -152,6 +164,10 @@ claude plugin install fast-jev-compaction@fast-jev-compaction
 
 The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
 …); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
+To go through a gateway that proxies System One, set `baseUrl` to its System One
+route and `model` to the name it routes (e.g. `typesafe/jev-latest`); `apiKeyEnv`
+names the settings `env` key holding the gateway's key. See
+[`hooks/README.md`](hooks/README.md#configuration).
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
 auto-compaction) goes through Jev: the toast reads
 `fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history

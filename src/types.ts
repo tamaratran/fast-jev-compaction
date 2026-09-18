@@ -105,16 +105,39 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Further attempts for one request after a transient failure (429, 5xx, or
+   * a `JevTransportError`). Default 2. Anything else (400, 401, 402, 404, a
+   * malformed body, a missing key) fails at once.
+   */
+  retries?: number;
+  /** Wait before the first retry, tripled on each further one. Default 500. */
+  retryDelayMs?: number;
+  /**
+   * What to do with a batch that still fails after its retries. `throw` (the
+   * default) rejects the whole compaction, so the caller can fall back; `keep`
+   * leaves every call of that batch untouched (keep call and result), applies
+   * the other batches' answers and counts it in `stats.failedBatches`. `keep`
+   * covers a transient failure that outlived its retries and a missing or
+   * malformed answer; a 4xx other than 429, an abort or an unrecognised error
+   * is the request's fault and throws in both modes.
+   */
+  onBatchFailure?: BatchFailurePolicy;
+  /**
+   * Waits between retries. Defaults to a timer on `globalThis.setTimeout`;
+   * a host without one (a Claude Code hooks module) passes its own clock.
+   */
+  sleep?: Sleep;
 }
 
-export interface ResolvedCompactOptions {
-  goal: string;
-  keepThreshold: number;
-  preserveRecentMessages: number;
-  maxStateTokens: number;
-  maxRequestTokens: number;
-  truncateHeadChars: number;
-}
+/** `throw` rejects the compaction on a failed batch; `keep` leaves that batch's calls whole. */
+export type BatchFailurePolicy = 'throw' | 'keep';
+
+/** Resolves once `ms` milliseconds have passed. */
+export type Sleep = (ms: number) => Promise<void>;
+
+/** `CompactOptions` with every default filled in. */
+export type ResolvedCompactOptions = Required<CompactOptions>;
 
 export interface CompactResult {
   /** The compacted transcript; untouched messages are the input objects. */
@@ -134,6 +157,14 @@ export interface CompactResult {
     /** Which fitting stage the state needed, '' when no request was made. */
     stateStage: string;
     requests: number;
+    /** Retries spent across all requests, including by batches that then failed. */
+    retries: number;
+    /**
+     * Batches kept whole under `onBatchFailure: 'keep'`: a transient failure
+     * that outlived its retries, or a response with a missing or malformed
+     * answer (a batch is all-or-nothing; one bad answer fails the batch).
+     */
+    failedBatches: number;
     ms: number;
   };
 }

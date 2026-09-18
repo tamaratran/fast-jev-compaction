@@ -1,14 +1,20 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "title": "Jev API key",
+      "description": "Bearer key for the Jev endpoint. Leave unset to read the variable named by apiKeyEnv.",
       "sensitive": true
+    },
+    "apiKeyEnv": {
+      "type": "string",
+      "title": "API key environment variable",
+      "description": "Key under `env` in settings.json that holds the Jev API key when apiKey is unset. The process environment is read for TYPESAFE_API_KEY only.",
+      "default": "TYPESAFE_API_KEY"
     },
     "keepThreshold": {
       "type": "number",
@@ -52,11 +58,39 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "retries": {
+      "type": "number",
+      "title": "Retries per request",
+      "description": "Further attempts for one Jev request after a 429, a 5xx or a failed fetch.",
+      "default": 2
+    },
+    "retryDelayMs": {
+      "type": "number",
+      "title": "Retry delay (ms)",
+      "description": "Wait before the first retry, tripled on each further one.",
+      "default": 500
+    },
     "model": {
       "type": "string",
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Jev endpoint URL",
+      "description": "URL the Jev requests are POSTed to. Point it at a gateway that proxies TypeSafe System One (an OpenRouter-style gateway needs the provider-prefixed model name).",
+      "default": "https://api.typesafe.ai/v1/systemone"
+    },
+    "onBatchFailure": {
+      "type": "string",
+      "title": "On a failed request batch",
+      "description": "After its retries, a request batch that still fails either aborts the compaction so Claude Code's built-in summary runs (throw), or keeps every call of that batch whole while the other batches' answers apply (keep).",
+      "options": [
+        "throw",
+        "keep"
+      ],
+      "default": "throw"
     }
   }
 }

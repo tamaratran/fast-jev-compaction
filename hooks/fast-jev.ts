@@ -9,7 +9,13 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
-import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import {
+  buildJevRequest,
+  DEFAULT_MODEL,
+  JevTransportError,
+  parseJevResponse,
+  SYSTEM_ONE_URL,
+} from '../src/request.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -19,10 +25,14 @@ import type {
   ToolUse,
 } from '../src/types.js';
 
+const DEFAULT_KEY_ENV = 'TYPESAFE_API_KEY';
+
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  baseUrl: SYSTEM_ONE_URL,
+  apiKeyEnv: DEFAULT_KEY_ENV,
 };
 
 export type HookFetchInit = {
@@ -45,6 +55,10 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  /** Endpoint the Jev requests are POSTed to; a gateway that proxies System One goes here. */
+  baseUrl: string;
+  /** Name of the environment variable (or `settings.env` key) that holds the key. */
+  apiKeyEnv: string;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -66,12 +80,15 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
+    'retries',
+    'retryDelayMs',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
   const config: HookConfig = {
     ...numbers,
+    onBatchFailure: options['onBatchFailure'] === 'keep' ? 'keep' : 'throw',
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
     minReductionRatio: optionNumber(
       options,
@@ -79,6 +96,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    baseUrl: optionString(options, 'baseUrl') ?? HOOK_DEFAULTS.baseUrl,
+    apiKeyEnv: optionString(options, 'apiKeyEnv') ?? HOOK_DEFAULTS.apiKeyEnv,
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -88,15 +107,25 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  baseUrl?: string,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
-      const response = await fetchFn(request.url, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-      });
+      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);
+      let response: HookFetchResponse;
+      try {
+        response = await fetchFn(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        });
+      } catch (error) {
+        throw new JevTransportError(error);
+      }
       return parseJevResponse(response.status, response.ok, response.text);
     },
   };
@@ -166,9 +195,14 @@ export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
+  sleep?: (ms: number) => Promise<void>,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  if (!config.apiKey) throw new Error(`${config.apiKeyEnv} is not configured`);
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, config.apiKey, config.model, config.baseUrl),
+    sleep ? { ...config, sleep } : config,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -184,12 +218,30 @@ export function summarize(result: CompactResult): string {
     stats.callsDropped > 0 ? `${stats.callsDropped} call_dropped` : '',
     stats.pinned > 0 ? `${stats.pinned} pinned` : '',
   ].filter(Boolean);
+  const requests = [
+    `${stats.requests} request(s)`,
+    stats.retries > 0 ? `${stats.retries} retried` : '',
+    stats.failedBatches > 0 ? `${stats.failedBatches} batch(es) failed and kept whole` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
   return `${percent(reductionRatio(result))} reduction; ${
     parts.join(', ') || 'no tool calls'
-  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)`;
+  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${requests}`;
 }
 
 const UI_LOG_MAX_CHARS = 4096;
+
+/** Whether the dispatch was abandoned (Esc, a hook above settled, budget out). */
+function isAborted(next: { signal?: AbortSignal }): boolean {
+  return next.signal?.aborted === true;
+}
+
+/** An interrupted compaction is vetoed quietly: no summary, nothing replaced. */
+function skipped($: { ui: { log: (text: string) => void } }): { skip: string } {
+  $.ui.log('compaction interrupted; nothing changed');
+  return { skip: 'fast-jev-compaction: interrupted' };
+}
 
 export function decisionLog(result: CompactResult): string {
   return result.decisions
@@ -224,25 +276,38 @@ export function decisionLogLines(
   );
 }
 
-async function getApiKey(
+/**
+ * The key, in order: the sensitive `apiKey` plugin option, the process
+ * environment (only for the default `TYPESAFE_API_KEY`: the host lists a
+ * module's environment reads statically, so `$.env.get` takes a literal),
+ * then the variable named by `apiKeyEnv` under `env` in the user's settings.
+ */
+export async function getApiKey(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
     settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
   },
-  config: HookConfig,
+  config: Pick<HookConfig, 'apiKey' | 'apiKeyEnv'>,
 ): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
-  if (fromEnv) return fromEnv;
+  if (config.apiKeyEnv === DEFAULT_KEY_ENV) {
+    const fromEnv = await $.env.get('TYPESAFE_API_KEY');
+    if (fromEnv) return fromEnv;
+  }
   const settings = await $.settings.read();
   const env = settings['env'];
   if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
+    const value = (env as Record<string, unknown>)[config.apiKeyEnv];
     if (typeof value === 'string' && value) return value;
   }
   return undefined;
 }
 
+/**
+ * Logs always; toasts unless the compaction is a `precompute`, whose result
+ * the engine only keeps for a compaction that may come later, so a toast
+ * saying messages were replaced would be premature.
+ */
 function notify(
   $: {
     ui: {
@@ -251,9 +316,10 @@ function notify(
     };
   },
   text: string,
+  quiet = false,
 ): void {
   $.ui.log(text);
-  $.ui.toast(text, { timeoutMs: 15_000 });
+  if (!quiet) $.ui.toast(text, { timeoutMs: 15_000 });
 }
 
 export const register: Register = (on: On, options: PluginOptions) => {
@@ -261,36 +327,53 @@ export const register: Register = (on: On, options: PluginOptions) => {
   let compacting = false;
 
   on('session.compact', async ($, event, next) => {
+    const quiet = event.trigger === 'precompute';
+    const interrupted = () => isAborted(next);
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
-        return { status: response.status, ok: response.ok, text: response.text };
-      });
+      if (!/^https:\/\//i.test(config.baseUrl)) {
+        $.ui.log(`baseUrl ${config.baseUrl} is not https; the key travels in cleartext`);
+      }
+      const { result, messages } = await compactSession(
+        event.messages,
+        config,
+        async (url, init) => {
+          const response = await $.http.fetch(url, init);
+          return { status: response.status, ok: response.ok, text: response.text };
+        },
+        (ms) => $.clock.sleep(ms, { signal: next.signal }),
+      );
+      if (interrupted()) return skipped($);
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
           $,
           `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
+          quiet,
         );
         return next(event);
       }
       notify(
         $,
         `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
+        quiet,
       );
       return { messages };
     } catch (error) {
+      if (interrupted()) return skipped($);
       notify(
         $,
         `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,
+        quiet,
       );
       return next(event);
     }
   });
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
-    if (compacting) return next(event);
+    // A subagent's turn is not the main conversation; compacting it from here
+    // would target the main loop while its turn still runs.
+    if (event.agentId || compacting) return next(event);
     try {
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
