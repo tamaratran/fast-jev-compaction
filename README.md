@@ -110,6 +110,14 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `resultQuestion` | `'rerun'` | Wording of the per-call result question: `'rerun'` asks whether re-running the tool would fail to reproduce the result; `'needed'` asks whether the assistant still needs the content to continue, independent of reproducibility |
+
+Reproducible results (a grep, a file read, a test run) score low under
+`'rerun'` even when their content is exactly what the assistant needs right
+now, since re-running would technically reproduce them. If the transcript
+keeps losing results the assistant just referenced, try `resultQuestion:
+'needed'` together with a lower `keepThreshold` (0.3 worked well in testing);
+the trade-off is an occasional stale result kept past its point.
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting

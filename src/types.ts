@@ -105,6 +105,14 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * How the `result_<id>` question is worded. `rerun` (default) asks whether
+   * re-running the tool would fail to reproduce the result, which scores any
+   * reproducible result low even when its content is still needed right now.
+   * `needed` instead asks whether the assistant still needs the content to
+   * continue, independent of reproducibility.
+   */
+  resultQuestion?: 'rerun' | 'needed';
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +122,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  resultQuestion: 'rerun' | 'needed';
 }
 
 export interface CompactResult {

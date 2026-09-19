@@ -7,6 +7,7 @@ import type {
   CompactResult,
   CompactionState,
   JevAsker,
+  JevQuestion,
   JevQuestions,
   Message,
   ResolvedCompactOptions,
@@ -21,6 +22,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  resultQuestion: 'rerun',
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,20 +51,39 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    resultQuestion:
+      options.resultQuestion === 'needed' ? 'needed' : DEFAULT_OPTIONS.resultQuestion,
+  };
+}
+
+function resultInstructions(call: ToolCall, resultQuestion: 'rerun' | 'needed'): JevQuestion {
+  if (resultQuestion === 'needed') {
+    return {
+      type: 'noul',
+      instructions: `Regardless of whether tool call ${call.id} (${call.tool}, ${call.resultChars} chars) could be re-run, does the assistant still need to see this result's actual content to continue the user's remaining request right now?`,
+      criteria: {
+        true: "e.g. the latest test failure log, a file's content right after editing it, or a value the user specifically pointed to — count these even if re-running the tool would reproduce them, since re-running still costs time or money",
+        false: 'stale: a later call already re-read the same file, or the failure/state this result reported has since been fixed or superseded',
+      },
+    };
+  }
+  return {
+    type: 'noul',
+    instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do`,
   };
 }
 
 /** The two `noul` questions asked about one call: keep the call, keep its result. */
-export function questionsFor(call: ToolCall): JevQuestions {
+export function questionsFor(
+  call: ToolCall,
+  resultQuestion: 'rerun' | 'needed' = DEFAULT_OPTIONS.resultQuestion,
+): JevQuestions {
   return {
     [`call_${call.id}`]: {
       type: 'noul',
       instructions: `Tool call ${call.id} (${call.tool}) should stay in the history: knowing this call was made, with its input, still matters for what the assistant does next`,
     },
-    [`result_${call.id}`]: {
-      type: 'noul',
-      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do`,
-    },
+    [`result_${call.id}`]: resultInstructions(call, resultQuestion),
   };
 }
 
@@ -73,14 +94,15 @@ export function questionsFor(call: ToolCall): JevQuestions {
 export function batchCalls(
   calls: readonly ToolCall[],
   stateTokens: number,
-  options: Pick<ResolvedCompactOptions, 'maxRequestTokens'>,
+  options: Pick<ResolvedCompactOptions, 'maxRequestTokens'> &
+    Partial<Pick<ResolvedCompactOptions, 'resultQuestion'>>,
 ): ToolCall[][] {
   const budget = options.maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
   const batches: ToolCall[][] = [];
   let current: ToolCall[] = [];
   let currentTokens = 0;
   for (const call of calls) {
-    const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
+    const tokens = estimateTokens(JSON.stringify(questionsFor(call, options.resultQuestion)));
     if (current.length > 0 && currentTokens + tokens > budget) {
       batches.push(current);
       current = [];
@@ -118,8 +140,12 @@ async function askBatch(
   asker: JevAsker,
   state: CompactionState,
   batch: readonly ToolCall[],
+  resultQuestion: ResolvedCompactOptions['resultQuestion'],
 ): Promise<Map<string, CallAnswer>> {
-  const questions: JevQuestions = Object.assign({}, ...batch.map(questionsFor));
+  const questions: JevQuestions = Object.assign(
+    {},
+    ...batch.map((call) => questionsFor(call, resultQuestion)),
+  );
   const { answers } = await asker.ask(state, questions);
   return new Map(
     batch.map((call) => [
@@ -273,7 +299,7 @@ export async function compact(
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
     const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
+      batches.map((batch) => askBatch(asker, state.state, batch, resolved.resultQuestion)),
     );
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }

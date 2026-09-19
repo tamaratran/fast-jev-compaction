@@ -84,6 +84,10 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
+  const resultQuestion = optionString(options, 'resultQuestion');
+  if (resultQuestion === 'needed' || resultQuestion === 'rerun') {
+    config.resultQuestion = resultQuestion;
+  }
   return config;
 }
 
