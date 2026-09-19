@@ -11,6 +11,7 @@ import {
   fitState,
   JevClient,
   parseJevResponse,
+  questionsFor,
   reductionRatio,
   resolveOptions,
   type HistoryToolCall,
@@ -79,6 +80,7 @@ describe('options', () => {
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
       truncateHeadChars: 300,
+      resultQuestion: 'rerun',
     });
     expect(resolveOptions({
       keepThreshold: Number.NaN,
@@ -252,6 +254,19 @@ describe('question batching', () => {
 
   it('throws when a single question does not fit', () => {
     expect(() => batchCalls(calls, 29_990, options)).toThrow(/no room/);
+  });
+
+  it('defaults the result question to rerun-reproducibility, unchanged from before', () => {
+    const q = questionsFor(calls[0]!);
+    expect(q[`result_${calls[0]!.id}`]?.instructions).toMatch(/re-running the tool would not do/);
+  });
+
+  it('asks a needed-content question instead when resultQuestion is "needed"', () => {
+    const q = questionsFor(calls[0]!, 'needed');
+    const question = q[`result_${calls[0]!.id}`]!;
+    expect(question.instructions).toMatch(/need to see this result's actual content/);
+    expect(question.instructions).not.toMatch(/re-running the tool would not do/);
+    expect((question as { criteria?: { true?: string } }).criteria?.true).toMatch(/re-running the tool would reproduce/);
   });
 });
 

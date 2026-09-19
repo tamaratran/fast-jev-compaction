@@ -52,6 +52,12 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "resultQuestion": {
+      "type": "string",
+      "title": "Result question wording",
+      "description": "How the per-call result question is worded: 'rerun' asks whether re-running the tool would fail to reproduce it; 'needed' asks whether the assistant still needs the content to continue, independent of reproducibility.",
+      "default": "rerun"
+    },
     "model": {
       "type": "string",
       "title": "Jev model",
