@@ -5,6 +5,48 @@ every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
 library.
 
+## Fork additions: jev-compact + jev-gate (OpenRouter, no TypeSafe key)
+
+This fork (github.com/aleksvega) adds two small CLI tools in `cli/` that run
+Jev through **OpenRouter's `/api/alpha/decisions`** (model `typesafe/jev-1.13`),
+so only an `OPENROUTER_API_KEY` is required — no TypeSafe API key. The upstream
+library and Claude Code plugin below are unchanged; to point them at
+OpenRouter instead, set `baseUrl` (library option) or `TYPESAFE_BASE_URL` +
+`TYPESAFE_MODEL=typesafe/jev-1.13`.
+
+**Setup**
+
+```bash
+npm install && npm run build
+export OPENROUTER_API_KEY="sk-or-..."   # your key; never commit it
+```
+
+**jev-compact — verbatim session compaction**
+
+```bash
+node cli/jev-compact.mjs transcript.json -o dump.md
+```
+
+Input: a JSON array of `{role, text, toolUses, toolResults}`. One batched Jev
+request decides, per tool call, whether the call and/or its result must stay
+verbatim; the rest is dropped. Typical run: 62→6 messages, 41K→4.6K chars,
+~$0.00002, output begins with a stats line.
+
+**jev-gate — confidence-gated pre-push guardrail**
+
+```bash
+python cli/jev-gate.py /path/to/repo              # exit 0 = ALLOW, 1 = BLOCK
+python cli/jev-gate.py /path/to/repo --threshold 0.9
+```
+
+One batched call (3 Noul + 1 Score over the last commit's diff): hardcoded
+secrets, syntax errors, breaking changes, test-failure risk. Blocks at
+probability ≥ threshold (default 0.85) or score ≥ 3; an API failure also
+blocks (fail-safe). ~400 ms, ~$0.00005. Verified: clean diff → ALLOW;
+diff containing an `sk-...` key → BLOCK at p=0.99.
+
+MIT, upstream credit: [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
+
 ## What and why
 
 Most context compaction asks an LLM to summarize old turns. A summary is
@@ -56,11 +98,16 @@ built-in compaction summary with the original messages.
 Jev failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 
-## Install and usage
+## Install and usage (upstream — TypeSafe endpoint)
 
-```sh
+The upstream library targets the official TypeSafe API. **This fork does not need
+a TypeSafe key**: use the OpenRouter setup in the "Fork additions" section above
+(`OPENROUTER_API_KEY` only, model `typesafe/jev-1.13:latest` via
+`https://openrouter.ai/api/alpha/decisions`).
+
+```bash
 npm install fast-jev-compaction
-export TYPESAFE_API_KEY=...
+export TYPESAFE_API_KEY=...   # only needed for the upstream/official endpoint
 ```
 
 ```ts

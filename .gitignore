@@ -2,3 +2,5 @@ node_modules
 dist
 .env
 demo/JevDemo/build
+cli/test-dump.md
+cli/test-transcript.json
