@@ -262,11 +262,34 @@ describe('decisions', () => {
   it('keeps, drops the result, or drops the call based on the keep probabilities', () => {
     expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.7 }, options).action).toBe('keep');
     expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.2 }, options).action).toBe('drop_result');
-    expect(decideCall(unpinned, { keepCall: 0.1, keepResult: 0.2 }, options).action).toBe('drop_call');
+    expect(decideCall(unpinned, { keepCall: 0.01, keepResult: 0.2 }, options).action).toBe('drop_call');
     expect(decideCall({ ...unpinned, pinned: true }, { keepCall: 0, keepResult: 0 }, options)).toMatchObject({
       action: 'keep',
       reason: 'pinned',
     });
+  });
+
+  it('gates the call separately from the result', () => {
+    // A call Jev is unsure about survives with a truncated result: the record
+    // that the work happened costs a fraction of what the result costs, and
+    // removing it leaves the assistant narrating work with no evidence (#65).
+    expect(decideCall(unpinned, { keepCall: 0.1, keepResult: 0.1 }, options).action).toBe('drop_result');
+    // Only a call Jev is fairly sure is spent goes away entirely.
+    expect(decideCall(unpinned, { keepCall: 0.02, keepResult: 0.9 }, options).action).toBe('keep');
+    expect(decideCall(unpinned, { keepCall: 0.02, keepResult: 0.1 }, options).action).toBe('drop_call');
+    // The two gates move independently.
+    const strictCall = { keepThreshold: 0.5, keepCallThreshold: 0.8 };
+    expect(decideCall(unpinned, { keepCall: 0.5, keepResult: 0.1 }, strictCall).action).toBe('drop_call');
+    const looseCall = { keepThreshold: 0.5, keepCallThreshold: 0 };
+    expect(decideCall(unpinned, { keepCall: 0, keepResult: 0 }, looseCall).action).toBe('drop_result');
+  });
+
+  it('falls back to the default call gate when a caller omits it', () => {
+    // `decideCall` is exported; a caller written before keepCallThreshold
+    // existed must not start dropping every call against `undefined`.
+    expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.1 }, { keepThreshold: 0.5 }).action).toBe(
+      'drop_result',
+    );
   });
 
   it('removes dropped calls and truncates dropped results', () => {
@@ -275,7 +298,7 @@ describe('decisions', () => {
     messages[5]!.toolResults![0]!.text = 'x'.repeat(2000);
     const calls = collectToolCalls(messages, 0);
     const decisions = [
-      decideCall(calls[0]!, { keepCall: 0.1, keepResult: 0.1 }, options),
+      decideCall(calls[0]!, { keepCall: 0.01, keepResult: 0.01 }, options),
       decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.1 }, options),
       decideCall(calls[2]!, { keepCall: 0.9, keepResult: 0.9 }, options),
     ];

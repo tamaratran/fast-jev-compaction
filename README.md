@@ -44,11 +44,24 @@ built-in compaction summary with the original messages.
    stays under `maxRequestTokens` (30k by default, under Jev's 32k request
    limit). The same full state is resent with every request; requests run
    concurrently and their answers are merged.
-6. Decisions per call, against `keepThreshold`:
-   - `keepResult ≥ threshold` → keep call and result;
-   - else `keepCall ≥ threshold` → keep the call, truncate the result to its
-     first `truncateHeadChars` characters plus a one-line note;
+6. Decisions per call. The result is gated by `keepThreshold`, the call by its
+   own, much lower `keepCallThreshold`:
+   - `keepResult ≥ keepThreshold` → keep call and result;
+   - else `keepCall ≥ keepCallThreshold` → keep the call, truncate the result to
+     its first `truncateHeadChars` characters plus a one-line note;
    - else → remove the call together with its result.
+
+   The two gates are separate because the two nouls are separate questions.
+   Their absolute scales are not comparable — each is an independent
+   probability, and one can sit low while the other sits high — so a single
+   threshold silently applies one question's calibration to the other. They also
+   carry very different costs: a result runs to thousands of characters, its
+   call to a few dozen. Dropping a call reclaims almost nothing and erases the
+   record that the work happened, leaving the assistant's own narration of it
+   standing with no evidence behind it. So the call gate sits far lower: a call
+   goes only when Jev is fairly sure it is spent. To reclaim the last bytes of a
+   call whose result is gone, set `truncateHeadChars: 0` — the call and its note
+   survive, the result body does not.
 7. The message list is rebuilt: a message that loses all its content is
    removed, untouched messages are returned as the same objects, and no result
    is ever left without its call.
@@ -105,7 +118,8 @@ put it in a source file.
 | `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
-| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
+| `keepThreshold` | `0.5` | Minimum keep probability for a tool *result* to stay verbatim |
+| `keepCallThreshold` | `0.05` | Minimum keep probability for the tool *call* to stay; below it the call goes with its result |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |

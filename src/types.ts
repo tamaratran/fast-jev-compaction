@@ -95,8 +95,14 @@ export interface FittedState {
 export interface CompactOptions {
   /** Ongoing task description; defaults to the last few user prompts. */
   goal?: string;
-  /** Minimum keep probability for a call or result to stay. Default 0.5. */
+  /** Minimum keep probability for a tool *result* to stay verbatim. Default 0.5. */
   keepThreshold?: number;
+  /**
+   * Minimum keep probability for the tool *call* to stay. Below it the call is
+   * removed together with its result. Default 0.05 — a call costs a fraction of
+   * what its result costs, so it is only dropped when Jev is fairly sure.
+   */
+  keepCallThreshold?: number;
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
   /** Estimated token ceiling for the state. Default 25000. */
@@ -110,6 +116,7 @@ export interface CompactOptions {
 export interface ResolvedCompactOptions {
   goal: string;
   keepThreshold: number;
+  keepCallThreshold: number;
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;

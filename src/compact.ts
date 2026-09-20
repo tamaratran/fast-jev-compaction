@@ -17,6 +17,18 @@ import type {
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
   keepThreshold: 0.5,
+  /**
+   * The gate for the *call*, separate from the gate for the *result*.
+   *
+   * `keepCall` and `keepResult` are two independent nouls; their absolute
+   * scales are not comparable, so one threshold cannot serve both
+   * (https://docs.typesafe.ai/model-jaggedness/jev-1.13 — "don't rely on
+   * expected structural invariance"). They also carry very different costs:
+   * a result runs to thousands of characters, its call to a few dozen. Losing
+   * the call loses the record that the work happened at all, for savings that
+   * round to zero — so this gate sits far lower than the result's.
+   */
+  keepCallThreshold: 0.05,
   preserveRecentMessages: 6,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
@@ -34,6 +46,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
   return {
     goal: options.goal ?? DEFAULT_OPTIONS.goal,
     keepThreshold: finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold),
+    keepCallThreshold: finite(options.keepCallThreshold, DEFAULT_OPTIONS.keepCallThreshold),
     preserveRecentMessages: Math.max(
       0,
       Math.floor(
@@ -101,14 +114,19 @@ export function batchCalls(
 export function decideCall(
   call: Pick<ToolCall, 'id' | 'tool' | 'pinned'>,
   answer: CallAnswer,
-  options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
+  options: Pick<ResolvedCompactOptions, 'keepThreshold'> &
+    Partial<Pick<ResolvedCompactOptions, 'keepCallThreshold'>>,
 ): CallDecision {
   const base = { id: call.id, tool: call.tool, ...answer };
   if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
+  // `keepCallThreshold` is newer than this exported function. A caller that
+  // predates it must not silently start dropping every call through a
+  // comparison against `undefined`, so fall back to the default.
+  const callThreshold = finite(options.keepCallThreshold, DEFAULT_OPTIONS.keepCallThreshold);
   if (answer.keepResult >= options.keepThreshold) {
     return { ...base, action: 'keep', reason: 'kept' };
   }
-  if (answer.keepCall >= options.keepThreshold) {
+  if (answer.keepCall >= callThreshold) {
     return { ...base, action: 'drop_result', reason: 'result_dropped' };
   }
   return { ...base, action: 'drop_call', reason: 'call_dropped' };

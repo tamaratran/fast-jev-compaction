@@ -13,8 +13,14 @@
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
-      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.",
+      "description": "Minimum Jev probability that a tool result is still needed verbatim; below it the result is truncated.",
       "default": 0.5
+    },
+    "keepCallThreshold": {
+      "type": "number",
+      "title": "Keep call threshold",
+      "description": "Minimum Jev probability that the tool call itself is still needed; below it the call is removed along with its result. Keep this low: a call costs a fraction of its result, and removing it erases the record that the work happened.",
+      "default": 0.05
     },
     "preserveRecentMessages": {
       "type": "number",
