@@ -138,6 +138,44 @@ describe('state fitting', () => {
     expect((state.history[4]?.tool_calls?.[0] as HistoryToolCall).result).toMatch(/^error, /);
   });
 
+  it('redacts credential-shaped tool input fields without mutating the transcript', () => {
+    const input = {
+      url: 'https://example.com',
+      headers: {
+        Authorization: 'Bearer production-token',
+        Accept: 'application/json',
+      },
+      env: {
+        OPENAI_API_KEY: 'sk-production',
+        REGION: 'us-east-1',
+      },
+      clientSecret: 'client-production',
+      nested: [{ refresh_token: 'refresh-production', value: 'visible' }],
+    };
+    const messages = [
+      message('user', 'Call the API.'),
+      call('tool-1', 'Http', input, 'ok'),
+      result('tool-1', 'ok'),
+      message('assistant', 'Done.'),
+    ];
+    const fitted = fitState(messages, collectToolCalls(messages, 0), {
+      ...fit,
+      preserveRecentMessages: 0,
+    });
+    const tool = fitted.state.history[1]?.tool_calls?.[0] as HistoryToolCall;
+
+    expect(tool.input).not.toContain('production');
+    expect(JSON.parse(tool.input)).toEqual({
+      url: 'https://example.com',
+      headers: { Authorization: '[REDACTED]', Accept: 'application/json' },
+      env: { OPENAI_API_KEY: '[REDACTED]', REGION: 'us-east-1' },
+      clientSecret: '[REDACTED]',
+      nested: [{ refresh_token: '[REDACTED]', value: 'visible' }],
+    });
+    expect(input.headers.Authorization).toBe('Bearer production-token');
+    expect(input.env.OPENAI_API_KEY).toBe('sk-production');
+  });
+
   it('defaults the goal to the latest user prompts', () => {
     const { state } = fitState(transcript(), [], { ...fit, goal: '' });
     expect(state.goal).toContain('Fix the failing test');
@@ -164,7 +202,9 @@ describe('state fitting', () => {
   it('shrinks old tool calls to one line each when nothing else is left to cut', () => {
     const messages = [message('user', 'start')];
     for (let i = 0; i < 40; i += 1) {
-      messages.push(call(`c${i}`, 'Read', { file_path: `/repo/src/module-${i}.ts` }, 'x'), result(`c${i}`, 'x'));
+      const input: Record<string, unknown> = { file_path: `/repo/src/module-${i}.ts` };
+      if (i === 0) input.credentials = { accessKeyId: 'compact-production-secret' };
+      messages.push(call(`c${i}`, 'Read', input, 'x'), result(`c${i}`, 'x'));
     }
     messages.push(message('assistant', 'done'));
     const calls = collectToolCalls(messages, 1);
@@ -177,9 +217,10 @@ describe('state fitting', () => {
     expect(compacted.stage).toBe('old calls compacted');
     expect(compacted.tokens).toBeLessThanOrEqual(Math.floor(full.tokens * 0.8));
     expect(compacted.tokens).toBeGreaterThanOrEqual(estimateTokens(JSON.stringify(compacted.state)));
-    expect(compacted.state.history[1]?.tool_calls?.[0]).toBe(
-      't1 Read file_path=/repo/src/module-0.ts → ok 1ch',
-    );
+    const firstCall = compacted.state.history[1]?.tool_calls?.[0];
+    expect(firstCall).toContain('file_path=/repo/src/module-0.ts');
+    expect(firstCall).toContain('credentials=[REDACTED]');
+    expect(JSON.stringify(compacted.state)).not.toContain('compact-production-secret');
     expect(compacted.state.history.at(-1)?.text).toBe('done');
 
     const merged = fitState(messages, calls, {

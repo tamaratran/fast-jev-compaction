@@ -14,12 +14,14 @@ item is kept when Jev's probability reaches `keepThreshold`; a dropped result
 is truncated to its first `truncateHeadChars` characters plus a one-line note,
 and a dropped call disappears with its result.
 
-The state is fitted into `maxStateTokens` in stages: tool inputs are
-truncated, then long texts are abridged (oldest first, pinned messages last),
-then old messages collapse to a `[… N chars omitted …]` note, then old tool
-calls shrink to one line each, then old call-less messages are left out and
-runs of old call-only messages fold together. Questions are split into as many requests as
-needed so each request (state plus questions) stays under `maxRequestTokens`;
+The state is fitted into `maxStateTokens` in stages: credential-shaped tool-input
+fields are redacted and tool inputs are truncated, then long texts are abridged
+(oldest first, pinned messages last), then old messages collapse to a
+`[… N chars omitted …]` note, then old tool calls shrink to one line each, then
+old call-less messages are left out and runs of old call-only messages fold
+together. Redaction is based on field names; it does not detect secrets embedded
+in free-form text, commands, or content strings. Questions are split into as many
+requests as needed so each request (state plus questions) stays under `maxRequestTokens`;
 the full state is resent with every request. Token counts are estimated
 without a tokenizer, calibrated to land a little above what Jev reports.
 
