@@ -62,10 +62,14 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   const numbers: Partial<Omit<CompactOptions, 'goal'>> = {};
   for (const key of [
     'keepThreshold',
+    'keepCallThreshold',
+    'keepResultThreshold',
     'preserveRecentMessages',
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
+    'maxMessageTextChars',
+    'minReductionRatio',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
@@ -84,6 +88,12 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
+  if (typeof options['cacheFriendly'] === 'boolean') {
+    config.cacheFriendly = options['cacheFriendly'];
+  }
+  if (typeof options['compactDialogue'] === 'boolean' || options['compactDialogue'] === 'auto') {
+    config.compactDialogue = options['compactDialogue'] as boolean | 'auto';
+  }
   return config;
 }
 
@@ -183,6 +193,7 @@ export function summarize(result: CompactResult): string {
     stats.resultsDropped > 0 ? `${stats.resultsDropped} results truncated` : '',
     stats.callsDropped > 0 ? `${stats.callsDropped} call_dropped` : '',
     stats.pinned > 0 ? `${stats.pinned} pinned` : '',
+    stats.dialogueCompacted ? 'dialogue compacted' : '',
   ].filter(Boolean);
   return `${percent(reductionRatio(result))} reduction; ${
     parts.join(', ') || 'no tool calls'

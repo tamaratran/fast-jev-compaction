@@ -9,7 +9,7 @@ import type {
 } from './types.js';
 
 export const STATE_CONTEXT =
-  'A coding assistant conversation is being compacted to free context. `history` is the whole conversation so far, oldest first; tool outputs are replaced by a short `result` note and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim. Whatever is not kept is deleted permanently, but the assistant can always re-run a tool or re-read a file.';
+  'A coding assistant conversation is being compacted to free context. `history` is the whole conversation so far, oldest first; tool outputs are replaced by a short `result` note and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim. Retain calls that changed state or hold active context; informational queries whose findings are spent can be dropped.';
 
 /** Successive caps on the serialised tool input included per call. */
 const INPUT_CHARS = [1000, 200, 60] as const;
@@ -57,12 +57,15 @@ export function isPinned(
 
 /**
  * Pairs every tool_use with its tool_result by `tool_use_id`. Calls without a
- * result are not candidates (there is nothing to drop yet).
+ * result are not candidates (there is nothing to drop yet). Calls whose result
+ * has already been truncated in previous compactions are pinned to preserve KV cache.
  */
 export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
+  options?: { cacheFriendly?: boolean },
 ): ToolCall[] {
+  const cacheFriendly = options?.cacheFriendly ?? true;
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
     for (const result of message.toolResults ?? []) {
@@ -74,6 +77,9 @@ export function collectToolCalls(
     for (const tool of message.toolUses) {
       const found = results.get(tool.tool_use_id);
       if (!found) continue;
+      const isAlreadyTruncated =
+        cacheFriendly &&
+        found.result.text.includes('[fast-jev-compaction truncated');
       calls.push({
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
@@ -85,7 +91,8 @@ export function collectToolCalls(
         isError: found.result.isError ?? false,
         pinned:
           isPinned(callIndex, messages.length, preserveRecentMessages) ||
-          isPinned(found.index, messages.length, preserveRecentMessages),
+          isPinned(found.index, messages.length, preserveRecentMessages) ||
+          isAlreadyTruncated,
       });
     }
   });

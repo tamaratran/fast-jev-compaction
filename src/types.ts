@@ -95,25 +95,43 @@ export interface FittedState {
 export interface CompactOptions {
   /** Ongoing task description; defaults to the last few user prompts. */
   goal?: string;
-  /** Minimum keep probability for a call or result to stay. Default 0.5. */
+  /** Minimum keep probability for a call or result to stay. Default 0.15. */
   keepThreshold?: number;
+  /** Minimum keep probability for the tool call itself to stay. Default 0.05. */
+  keepCallThreshold?: number;
+  /** Minimum keep probability for the tool result to stay verbatim. Default keepThreshold (0.15). */
+  keepResultThreshold?: number;
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
   /** Estimated token ceiling for the state. Default 25000. */
   maxStateTokens?: number;
-  /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
+  /** Estimated token ceiling for state plus one batch of questions. Default 64000. */
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /** Maximum characters per unpinned message before abridging during dialogue compaction. Default 2000. */
+  maxMessageTextChars?: number;
+  /** Whether to compact dialogue text when tool reduction is insufficient or text floor dominates. Default 'auto'. */
+  compactDialogue?: boolean | 'auto';
+  /** Minimum character reduction ratio required before falling back or triggering dialogue compaction. Default 0.20. */
+  minReductionRatio?: number;
+  /** Preserve already-truncated tool results and avoid churning prefix KV cache. Default true. */
+  cacheFriendly?: boolean;
 }
 
 export interface ResolvedCompactOptions {
   goal: string;
   keepThreshold: number;
+  keepCallThreshold: number;
+  keepResultThreshold: number;
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  maxMessageTextChars: number;
+  compactDialogue: boolean | 'auto';
+  minReductionRatio: number;
+  cacheFriendly: boolean;
 }
 
 export interface CompactResult {
@@ -125,6 +143,9 @@ export interface CompactResult {
     messagesAfter: number;
     charsBefore: number;
     charsAfter: number;
+    textCharsBefore: number;
+    textCharsAfter: number;
+    dialogueCompacted: boolean;
     calls: number;
     kept: number;
     resultsDropped: number;

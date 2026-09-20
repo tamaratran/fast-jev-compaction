@@ -13,8 +13,14 @@
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
-      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.",
-      "default": 0.5
+      "description": "Minimum Jev probability that a tool result is still needed verbatim; below it the result is truncated.",
+      "default": 0.15
+    },
+    "keepCallThreshold": {
+      "type": "number",
+      "title": "Keep call threshold",
+      "description": "Minimum Jev probability that a tool call itself is needed; below it the call is removed.",
+      "default": 0.05
     },
     "preserveRecentMessages": {
       "type": "number",
@@ -34,6 +40,18 @@
       "description": "Minimum estimated character reduction required to replace history.",
       "default": 0.25
     },
+    "compactDialogue": {
+      "type": "string",
+      "title": "Compact dialogue",
+      "description": "Whether to compact dialogue text when tool reduction is insufficient or text floor dominates (auto, true, false).",
+      "default": "auto"
+    },
+    "cacheFriendly": {
+      "type": "boolean",
+      "title": "Cache friendly",
+      "description": "Preserve already-truncated tool results and maintain KV prefix cache across compactions.",
+      "default": true
+    },
     "maxStateTokens": {
       "type": "number",
       "title": "Maximum Jev state tokens",
@@ -44,7 +62,7 @@
       "type": "number",
       "title": "Maximum Jev request tokens",
       "description": "Estimated token budget for state plus questions in one Jev request.",
-      "default": 30000
+      "default": 64000
     },
     "truncateHeadChars": {
       "type": "number",
