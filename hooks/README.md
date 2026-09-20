@@ -29,7 +29,7 @@ hooks surface before installing or loading it:
 
 ```sh
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
-export TYPESAFE_API_KEY="<your TypeSafe key>"
+export TYPESAFE_API_KEY="<your TypeSafe key>"   # optional; without it Jev is reached at OpenCode Zen
 
 claude plugin marketplace add tamaratran/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
@@ -58,8 +58,10 @@ The plugin declares these `userConfig` values in
 | `model` | `jev-latest` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
-through `TYPESAFE_API_KEY`. The environment variable is the recommended
-development setup.
+through `TYPESAFE_API_KEY`. Without either the hook reaches Jev at OpenCode
+Zen's System One endpoint (`https://opencode.ai/zen/v1/systemone`) with the
+free `jev-1.13-free` model, which needs no key; `baseUrl` and `model` override
+that. Each compaction logs which endpoint was used.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they

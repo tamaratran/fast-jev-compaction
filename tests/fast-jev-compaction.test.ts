@@ -431,3 +431,20 @@ describe('HTTP client', () => {
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
   });
 });
+
+describe('keyless endpoints', () => {
+  it('sends no authorization header without a key and only requires one for TypeSafe', async () => {
+    const request = buildJevRequest({ apiKey: '', baseUrl: 'https://opencode.ai/zen/v1/systemone', model: 'jev-1.13-free' }, 's', {});
+    expect(request.headers).toEqual({ 'content-type': 'application/json' });
+    expect(buildJevRequest({ apiKey: 'k' }, 's', {}).headers.authorization).toBe('Bearer k');
+    const seen: string[] = [];
+    const fetcher = (async (url: string | URL | Request, init?: { headers?: Record<string, string> }) => {
+      seen.push(`${String(url)} ${Object.keys(init?.headers ?? {}).sort().join(',')}`);
+      return { status: 200, ok: true, text: async () => JSON.stringify({ answers: {} }) };
+    }) as unknown as typeof fetch;
+    const zen = new JevClient({ apiKey: '', baseUrl: 'https://opencode.ai/zen/v1/systemone', fetch: fetcher });
+    await expect(zen.ask('s', {})).resolves.toEqual({ answers: {} });
+    expect(seen).toEqual(['https://opencode.ai/zen/v1/systemone content-type']);
+    await expect(new JevClient({ apiKey: '', fetch: fetcher }).ask('s', {})).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});

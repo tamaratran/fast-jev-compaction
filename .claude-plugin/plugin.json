@@ -4,11 +4,21 @@
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
+    "provider": {
+      "type": "string",
+      "title": "Jev provider",
+      "description": "Where Jev is reached: typesafe (needs the key) or opencode (OpenCode Zen's free Jev, no key). Default: typesafe when a key is available, opencode otherwise."
+    },
     "apiKey": {
       "type": "string",
       "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY; without either, Jev is reached at OpenCode Zen's free endpoint, which needs no key.",
       "sensitive": true
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "System One endpoint",
+      "description": "Endpoint override. Default: TypeSafe with a key, OpenCode Zen (https://opencode.ai/zen/v1/systemone) without one."
     },
     "keepThreshold": {
       "type": "number",
@@ -55,7 +65,7 @@
     "model": {
       "type": "string",
       "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
+      "description": "Jev model name. jev-latest at TypeSafe; at OpenCode Zen the free model jev-1.13-free is used unless set (jev-1.13 is Zen's paid one).",
       "default": "jev-latest"
     }
   }

@@ -58,6 +58,7 @@ export type CallAction = 'keep' | 'drop_result' | 'drop_call';
 
 export interface CallDecision extends CallAnswer {
   id: string;
+  tool_use_id: string;
   tool: string;
   action: CallAction;
   reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';

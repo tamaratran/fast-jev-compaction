@@ -3,9 +3,11 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  describeProvider,
   resolveHookConfig,
   summarize,
   toSessionMessages,
+  withProvider,
 } from '../hooks/fast-jev.ts';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
 
@@ -54,6 +56,8 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({ provider: 'opencode' }).provider).toBe('opencode');
+    expect(resolveHookConfig({ provider: 'nope' }).provider).toBeUndefined();
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -137,6 +141,30 @@ describe('compactSession', () => {
     ]);
     expect(lines.every((line) => line.length <= 60)).toBe(true);
     expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);
+  });
+
+  it('reaches OpenCode Zen without a key and sends no authorization header there', async () => {
+    const config = withProvider(resolveHookConfig({ preserveRecentMessages: 1 }), undefined);
+    expect(config).toMatchObject({ baseUrl: 'https://opencode.ai/zen/v1/systemone', model: 'jev-1.13-free' });
+    expect(config.apiKey).toBeUndefined();
+    expect(describeProvider(config)).toBe('jev-1.13-free at https://opencode.ai/zen/v1/systemone (no key)');
+    expect(withProvider(resolveHookConfig({ model: 'jev-1.13' }), undefined).model).toBe('jev-1.13');
+    expect(withProvider(resolveHookConfig({}), 'k')).toMatchObject({ apiKey: 'k', model: 'jev-latest' });
+    const forced = withProvider(resolveHookConfig({ provider: 'opencode' }), 'k');
+    expect(forced).toMatchObject({ provider: 'opencode', baseUrl: 'https://opencode.ai/zen/v1/systemone', model: 'jev-1.13-free' });
+    expect(forced.apiKey).toBeUndefined();
+    expect(withProvider(resolveHookConfig({ baseUrl: 'http://jev' }), undefined)).toMatchObject({ baseUrl: 'http://jev', model: 'jev-latest' });
+    const urls: string[] = [];
+    const headers: string[][] = [];
+    const answers = jevFetch(() => 0.9);
+    const { result: output } = await compactSession(transcript(), config, async (url, init) => {
+      urls.push(url);
+      headers.push(Object.keys(init?.headers ?? {}));
+      return answers(url, init);
+    });
+    expect(urls).toEqual(['https://opencode.ai/zen/v1/systemone']);
+    expect(headers).toEqual([['content-type']]);
+    expect(output.stats.requests).toBe(1);
   });
 
   it('throws on a missing key and on failed requests so the hook falls back', async () => {

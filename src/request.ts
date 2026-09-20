@@ -2,6 +2,10 @@ import type { JevAnswer, JevQuestions, JevResponse, JevState } from './types.js'
 
 export const SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';
 export const DEFAULT_MODEL = 'jev-latest';
+/** OpenCode Zen serves the same System One API; its free Jev needs no key. */
+export const OPENCODE_ZEN_URL = 'https://opencode.ai/zen/v1/systemone';
+export const OPENCODE_ZEN_FREE_MODEL = 'jev-1.13-free';
+export const OPENCODE_ZEN_MODEL = 'jev-1.13';
 
 export interface JevRequest {
   url: string;
@@ -10,7 +14,10 @@ export interface JevRequest {
   body: string;
 }
 
-/** The HTTP request for one Jev call, for any fetch-like transport. */
+/**
+ * The HTTP request for one Jev call, for any fetch-like transport. An empty
+ * `apiKey` sends no `authorization` header (OpenCode Zen's free Jev).
+ */
 export function buildJevRequest(
   params: {
     apiKey: string;
@@ -24,7 +31,7 @@ export function buildJevRequest(
     url: params.baseUrl ?? SYSTEM_ONE_URL,
     method: 'POST',
     headers: {
-      authorization: `Bearer ${params.apiKey}`,
+      ...(params.apiKey ? { authorization: `Bearer ${params.apiKey}` } : {}),
       'content-type': 'application/json',
     },
     body: JSON.stringify({

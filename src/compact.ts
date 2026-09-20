@@ -1,6 +1,7 @@
 import { noulAnswer } from './request.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
 import type {
+  CallAction,
   CallAnswer,
   CallDecision,
   CompactOptions,
@@ -99,11 +100,11 @@ export function batchCalls(
 }
 
 export function decideCall(
-  call: Pick<ToolCall, 'id' | 'tool' | 'pinned'>,
+  call: Pick<ToolCall, 'id' | 'tool' | 'pinned' | 'tool_use_id'>,
   answer: CallAnswer,
   options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
 ): CallDecision {
-  const base = { id: call.id, tool: call.tool, ...answer };
+  const base = { id: call.id, tool_use_id: call.tool_use_id, tool: call.tool, ...answer };
   if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
   if (answer.keepResult >= options.keepThreshold) {
     return { ...base, action: 'keep', reason: 'kept' };
@@ -132,7 +133,8 @@ async function askBatch(
   );
 }
 
-function truncatedResultText(text: string, isError: boolean, headChars: number): string {
+/** A dropped result: its first `headChars` characters plus a one-line note. */
+export function truncatedResultText(text: string, isError: boolean, headChars: number): string {
   if (text.length <= headChars + 120) return text;
   const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : '';
   return `${head}[fast-jev-compaction truncated ${text.length - headChars} chars of this tool result${
@@ -153,11 +155,24 @@ export function applyDecisions(
   headChars: number,
 ): Message[] {
   const byId = new Map(calls.map((call) => [call.id, call]));
-  const actions = new Map<string, CallDecision['action']>();
+  const actions = new Map<string, CallAction>();
   for (const decision of decisions) {
     const call = byId.get(decision.id);
     if (call && decision.action !== 'keep') actions.set(call.tool_use_id, decision.action);
   }
+  return applyActions(messages, actions, headChars);
+}
+
+/**
+ * `applyDecisions` keyed by `tool_use_id`: `drop_call` removes the tool_use
+ * and its tool_result, `drop_result` truncates the result to `headChars`,
+ * `keep` (or no entry) leaves the call alone.
+ */
+export function applyActions(
+  messages: readonly Message[],
+  actions: ReadonlyMap<string, CallAction>,
+  headChars: number,
+): Message[] {
   const kept: Message[] = [];
   for (const message of messages) {
     const touched =

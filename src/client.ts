@@ -1,4 +1,4 @@
-import { buildJevRequest, parseJevResponse } from './request.js';
+import { buildJevRequest, parseJevResponse, SYSTEM_ONE_URL } from './request.js';
 import type { JevAsker, JevQuestions, JevResponse, JevState } from './types.js';
 
 export interface JevClientOptions {
@@ -12,7 +12,11 @@ export interface JevClientOptions {
   fetch?: typeof fetch;
 }
 
-/** Asks Jev over HTTP with the global `fetch` (or an injected one). */
+/**
+ * Asks Jev over HTTP with the global `fetch` (or an injected one). A key is
+ * required for TypeSafe's own endpoint; another `baseUrl` (OpenCode Zen's
+ * free Jev) may be used without one.
+ */
 export class JevClient implements JevAsker {
   private readonly apiKey: string;
   private readonly model: string | undefined;
@@ -27,7 +31,9 @@ export class JevClient implements JevAsker {
   }
 
   async ask(state: JevState, questions: JevQuestions): Promise<JevResponse> {
-    if (!this.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
+    if (!this.apiKey && (this.baseUrl ?? SYSTEM_ONE_URL) === SYSTEM_ONE_URL) {
+      throw new Error('TYPESAFE_API_KEY is not configured');
+    }
     const request = buildJevRequest(
       { apiKey: this.apiKey, model: this.model, baseUrl: this.baseUrl },
       state,

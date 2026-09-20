@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model.",
   "type": "module",
   "license": "MIT",
@@ -11,15 +11,25 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/opencode/server.d.ts",
+      "import": "./opencode/server.js"
+    },
+    "./opencode": {
+      "types": "./dist/opencode/server.d.ts",
+      "import": "./dist/opencode/server.js"
     }
   },
   "files": [
     "dist",
+    "opencode",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "compile": "tsc && npm run bundle",
+    "bundle": "esbuild src/opencode/server.ts --bundle --format=esm --platform=node --target=node18 --outfile=opencode/server.js --log-level=warning",
     "typecheck": "tsc --noEmit && npm run typecheck:hooks",
     "test": "vitest run",
     "demo": "tsx examples/demo.ts",
@@ -27,7 +37,10 @@
     "validate:plugin": "claude plugin validate .claude-plugin/plugin.json"
   },
   "devDependencies": {
+    "@opencode-ai/plugin": "1.18.31",
+    "@opencode/plugin": "2.0.11",
     "@types/node": "^22.10.2",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

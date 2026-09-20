@@ -9,7 +9,13 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
-import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import {
+  buildJevRequest,
+  DEFAULT_MODEL,
+  OPENCODE_ZEN_FREE_MODEL,
+  OPENCODE_ZEN_URL,
+  parseJevResponse,
+} from '../src/request.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -41,7 +47,11 @@ export type HookFetchResponse = {
 export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetchResponse>;
 
 export type HookConfig = CompactOptions & {
+  /** `opencode` forces OpenCode Zen even when a TypeSafe key is available. */
+  provider?: 'typesafe' | 'opencode';
   apiKey?: string;
+  /** System One endpoint; unset means TypeSafe's own, which needs the key. */
+  baseUrl?: string;
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
@@ -80,18 +90,27 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  const provider = optionString(options, 'provider');
+  if (provider === 'opencode' || provider === 'typesafe') config.provider = provider;
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
+  const baseUrl = optionString(options, 'baseUrl');
+  if (baseUrl) config.baseUrl = baseUrl;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
   return config;
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  baseUrl?: string,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -161,14 +180,37 @@ export type SessionCompaction = {
   messages: SessionMessage[];
 };
 
-/** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
+/**
+ * Without a TypeSafe key, the same config pointed at OpenCode Zen's free Jev,
+ * which needs none (the model too, unless one was chosen explicitly).
+ */
+export function withProvider(config: HookConfig, apiKey: string | undefined): HookConfig {
+  if (config.provider !== 'opencode' && apiKey) return { ...config, apiKey };
+  if (config.baseUrl) return config;
+  return {
+    ...config,
+    baseUrl: OPENCODE_ZEN_URL,
+    model: config.model === DEFAULT_MODEL ? OPENCODE_ZEN_FREE_MODEL : config.model,
+  };
+}
+
+/** Where Jev is reached, for the log. */
+export function describeProvider(config: HookConfig): string {
+  return `${config.model} at ${config.baseUrl ?? 'TypeSafe'} (${config.apiKey ? 'with key' : 'no key'})`;
+}
+
+/** Runs the library over a session transcript; throws when TypeSafe has no key or Jev fails. */
 export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  if (!config.apiKey && !config.baseUrl) throw new Error('TYPESAFE_API_KEY is not configured');
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, config.apiKey ?? '', config.model, config.baseUrl),
+    config,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -262,7 +304,8 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const config = withProvider(configured, await getApiKey($, configured));
+      $.ui.log(`Jev: ${describeProvider(config)}`);
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
