@@ -5,12 +5,14 @@ import {
   buildJevRequest,
   collectToolCalls,
   compact,
+  compactDialogueMessages,
   compactMessages,
   decideCall,
   estimateTokens,
   fitState,
   JevClient,
   parseJevResponse,
+  questionsFor,
   reductionRatio,
   resolveOptions,
   type HistoryToolCall,
@@ -74,21 +76,31 @@ const fit = {
 describe('options', () => {
   it('fills in defaults and ignores non-finite values', () => {
     expect(resolveOptions()).toMatchObject({
-      keepThreshold: 0.5,
+      keepThreshold: 0.15,
+      keepCallThreshold: 0.05,
+      keepResultThreshold: 0.15,
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
-      maxRequestTokens: 30_000,
+      maxRequestTokens: 64_000,
       truncateHeadChars: 300,
+      maxMessageTextChars: 2000,
+      compactDialogue: 'auto',
+      minReductionRatio: 0.20,
+      cacheFriendly: true,
     });
     expect(resolveOptions({
       keepThreshold: Number.NaN,
       preserveRecentMessages: 2.7,
       truncateHeadChars: -1.2,
     })).toMatchObject({
-      keepThreshold: 0.5,
+      keepThreshold: 0.15,
       preserveRecentMessages: 2,
       truncateHeadChars: 0,
     });
+  });
+
+  it('rejects maxStateTokens exceeding 32000', () => {
+    expect(() => resolveOptions({ maxStateTokens: 35_000 })).toThrow(/exceeds Jev limit of 32000/);
   });
 });
 
@@ -256,17 +268,41 @@ describe('question batching', () => {
 });
 
 describe('decisions', () => {
-  const options = { keepThreshold: 0.5 };
+  const options = { keepThreshold: 0.15, keepCallThreshold: 0.05 };
   const unpinned = { id: 't1', tool: 'Read', pinned: false };
 
   it('keeps, drops the result, or drops the call based on the keep probabilities', () => {
     expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.7 }, options).action).toBe('keep');
-    expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.2 }, options).action).toBe('drop_result');
-    expect(decideCall(unpinned, { keepCall: 0.1, keepResult: 0.2 }, options).action).toBe('drop_call');
+    expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.02 }, options).action).toBe('drop_result');
+    expect(decideCall(unpinned, { keepCall: 0.02, keepResult: 0.02 }, options).action).toBe('drop_call');
     expect(decideCall({ ...unpinned, pinned: true }, { keepCall: 0, keepResult: 0 }, options)).toMatchObject({
       action: 'keep',
       reason: 'pinned',
     });
+  });
+
+  it('gates the tool call separately from its result', () => {
+    expect(
+      decideCall(
+        unpinned,
+        { keepCall: 0.08, keepResult: 0.1 },
+        { keepThreshold: 0.15, keepCallThreshold: 0.05 },
+      ).action,
+    ).toBe('drop_result');
+    expect(
+      decideCall(
+        unpinned,
+        { keepCall: 0.03, keepResult: 0.1 },
+        { keepThreshold: 0.15, keepCallThreshold: 0.05 },
+      ).action,
+    ).toBe('drop_call');
+    expect(
+      decideCall(
+        unpinned,
+        { keepCall: 0.03, keepResult: 0.2 },
+        { keepThreshold: 0.15, keepCallThreshold: 0.05 },
+      ).action,
+    ).toBe('keep');
   });
 
   it('removes dropped calls and truncates dropped results', () => {
@@ -275,8 +311,8 @@ describe('decisions', () => {
     messages[5]!.toolResults![0]!.text = 'x'.repeat(2000);
     const calls = collectToolCalls(messages, 0);
     const decisions = [
-      decideCall(calls[0]!, { keepCall: 0.1, keepResult: 0.1 }, options),
-      decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.1 }, options),
+      decideCall(calls[0]!, { keepCall: 0.02, keepResult: 0.02 }, options),
+      decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.02 }, options),
       decideCall(calls[2]!, { keepCall: 0.9, keepResult: 0.9 }, options),
     ];
     const kept = applyDecisions(messages, decisions, calls, 300);
@@ -315,7 +351,7 @@ describe('decisions', () => {
   it('honours truncateHeadChars, including a zero head', () => {
     const messages = transcript();
     const calls = collectToolCalls(messages, 0);
-    const decisions = [decideCall(calls[0]!, { keepCall: 0.9, keepResult: 0.1 }, { keepThreshold: 0.5 })];
+    const decisions = [decideCall(calls[0]!, { keepCall: 0.9, keepResult: 0.02 }, { keepThreshold: 0.15 })];
     const original = messages[2]!.toolResults![0]!.text;
     const total = original.length;
 
@@ -336,15 +372,17 @@ describe('compact', () => {
   it('resends the full state with every batch and merges the answers', async () => {
     const seen: Seen[] = [];
     const messages = transcript();
-    const stateTokens = fitState(messages, collectToolCalls(messages, 1), {
+    const calls = collectToolCalls(messages, 1);
+    const stateTokens = fitState(messages, calls, {
       ...fit,
       goal: '',
       preserveRecentMessages: 1,
     }).tokens;
+    const singleQuestionTokens = estimateTokens(JSON.stringify(questionsFor(calls[0]!)));
     const output = await compact(
       messages,
-      fakeJev((name) => (name.startsWith('call_') ? 0.9 : 0.1), seen),
-      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + 150 },
+      fakeJev((name) => (name.startsWith('call_') ? 0.9 : 0.02), seen),
+      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + singleQuestionTokens + 30 },
     );
 
     expect(output.stats.requests).toBe(seen.length);
@@ -429,5 +467,64 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('question criteria and calibration', () => {
+  it('supplies bidirectional true and false criteria to remove prompt bias', () => {
+    const call: ToolCall = {
+      id: 't1',
+      tool_use_id: 'tool-1',
+      tool: 'Edit',
+      input: { file_path: 'src/main.ts' },
+      callIndex: 1,
+      resultIndex: 2,
+      resultChars: 120,
+      isError: false,
+      pinned: false,
+    };
+    const questions = questionsFor(call);
+    const callQ = questions.call_t1;
+    const resultQ = questions.result_t1;
+    expect(callQ?.type).toBe('noul');
+    expect(resultQ?.type).toBe('noul');
+    if (callQ?.type === 'noul') {
+      expect(callQ.criteria?.true).toContain('changed state');
+      expect(callQ.criteria?.false).toContain('informational query');
+    }
+    if (resultQ?.type === 'noul') {
+      expect(resultQ.criteria?.true).toContain('verbatim output');
+      expect(resultQ.criteria?.false).toContain('routine success logs');
+    }
+  });
+});
+
+describe('dialogue compaction and text-floor deadlock prevention', () => {
+  it('compacts dialogue text when text floor dominates or tool candidates are absent', async () => {
+    const messages: Message[] = [
+      message('user', 'Initial instruction to solve the task.'),
+      message('assistant', 'Thought process: ' + 'analysis '.repeat(300)),
+      message('user', 'Keep going with the investigation.'),
+      message('assistant', 'More thoughts: ' + 'debugging '.repeat(300)),
+      message('user', 'Latest message requiring action.'),
+    ];
+    const output = await compact(messages, fakeJev(() => 0), {
+      preserveRecentMessages: 1,
+      maxMessageTextChars: 500,
+    });
+    expect(output.stats.dialogueCompacted).toBe(true);
+    expect(output.stats.textCharsAfter).toBeLessThan(output.stats.textCharsBefore);
+    expect(reductionRatio(output)).toBeGreaterThan(0);
+    expect(output.messages[0]?.text).toBe('Initial instruction to solve the task.');
+    expect(output.messages.at(-1)?.text).toBe('Latest message requiring action.');
+    expect(output.messages[1]?.text).toContain('fast-jev-compaction omitted');
+  });
+
+  it('preserves already-truncated tool results and avoids churn for cache friendliness', () => {
+    const messages = transcript();
+    messages[2]!.toolResults![0]!.text =
+      '[fast-jev-compaction truncated 2000 chars of this tool result; re-run the tool if needed]';
+    const calls = collectToolCalls(messages, 0, { cacheFriendly: true });
+    expect(calls[0]?.pinned).toBe(true);
   });
 });

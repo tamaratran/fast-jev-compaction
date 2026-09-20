@@ -36,22 +36,24 @@ built-in compaction summary with the original messages.
    does not fit, compaction throws. Tokens are estimated without a tokenizer (a
    word per six letters, half a token per digit, ~one per other symbol),
    calibrated to land a little above the counts Jev reports.
-4. For every non-pinned call Jev gets two `noul` questions: should the **call**
-   stay (knowing it was made, with its input, still matters), and should the
-   **result** stay verbatim (its contents are still needed and re-running the
-   tool would not do).
+4. For every non-pinned call Jev gets two `noul` questions with explicit criteria:
+   should the **call** stay (knowing it was made, with its input, still matters),
+   and should the **result** stay verbatim (its contents are still needed and
+   re-running the tool would not do).
 5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (30k by default, under Jev's 32k request
-   limit). The same full state is resent with every request; requests run
-   concurrently and their answers are merged.
-6. Decisions per call, against `keepThreshold`:
-   - `keepResult ≥ threshold` → keep call and result;
-   - else `keepCall ≥ threshold` → keep the call, truncate the result to its
-     first `truncateHeadChars` characters plus a one-line note;
+   stays under `maxRequestTokens` (64k by default, matching Jev's request limit).
+   The same full state is resent with every request; requests run concurrently
+   and their answers are merged.
+6. Decisions per call against independent calibrated thresholds:
+   - `keepResult ≥ keepResultThreshold` (default `0.15`) → keep call and result;
+   - else `keepCall ≥ keepCallThreshold` (default `0.05`) → keep the call, truncate
+     the result to its first `truncateHeadChars` characters plus a one-line note;
    - else → remove the call together with its result.
 7. The message list is rebuilt: a message that loses all its content is
    removed, untouched messages are returned as the same objects, and no result
-   is ever left without its call.
+   is ever left without its call. When tool compaction yields insufficient
+   reduction or text dominates, dialogue compaction safely abridges unpinned
+   history to break text-floor deadlocks.
 
 Jev failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
@@ -105,25 +107,30 @@ put it in a source file.
 | `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
-| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
+| `keepThreshold` | `0.15` | Minimum keep probability for a tool result to stay verbatim |
+| `keepCallThreshold` | `0.05` | Minimum keep probability for a tool call itself to stay |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
-| `maxStateTokens` | `25000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
+| `maxStateTokens` | `25000` | Estimated token ceiling for the state (max 32000) |
+| `maxRequestTokens` | `64000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `compactDialogue` | `'auto'` | Compact dialogue text when tool reduction is insufficient or text floor dominates (`'auto'`, `true`, `false`) |
+| `cacheFriendly` | `true` | Preserve already-truncated tool results and avoid churning prefix KV cache |
 
-`result.stats` reports message and character counts before and after, the
-per-reason decision counts, the state size in estimated tokens, which fitting
-stage was needed, and the number of requests.
+`result.stats` reports message and character counts before and after, text
+character counts, dialogue compaction status, the per-reason decision counts,
+the state size in estimated tokens, which fitting stage was needed, and the number
+of requests.
 
 ## Limitations
 
-- Only tool calls and results are candidates; text messages are never removed
-  or shortened in the output (they are only abridged in the state Jev sees).
 - Token sizes are estimates from character counts, not a tokenizer.
 - Calibration is at the request level; a probability is not a proof that a
-  result is safe to delete. The assistant can always re-run the tool.
-- The full state is repeated with every request, so a history near the state
-  ceiling costs one request per handful of questions.
+  result is safe to delete.
+- When dialogue text floor dominates context, `compactDialogue: 'auto'` safely
+  abridges unpinned historical turns to break text-floor deadlocks while keeping
+  the task prompt and recent turns intact.
+- Already-truncated calls are pinned (`cacheFriendly: true`), protecting the KV
+  prefix cache in modern inference engines from cache thrashing.
 
 ## Claude Code plugin
 
