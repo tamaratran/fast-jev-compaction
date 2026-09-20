@@ -330,6 +330,64 @@ describe('decisions', () => {
       `[fast-jev-compaction truncated ${total} chars of this tool result; re-run the tool if needed]`,
     );
   });
+
+  it('marks a dropped call in the narration instead of leaving the text verbatim', () => {
+    const messages: Message[] = [
+      message('user', 'Fix the failing test.'),
+      message('assistant', 'Read the config, then run the suite.', {
+        toolUses: [{ tool_use_id: 'c1', tool: 'Read', input: { file_path: 'a.ts' }, text: 'x'.repeat(50) }],
+      }),
+      message('user', '', { toolResults: [{ tool_use_id: 'c1', text: 'x'.repeat(50) }] }),
+      message('user', 'go ahead'),
+    ];
+    const calls = collectToolCalls(messages, 0);
+    expect(calls).toHaveLength(1);
+    const decisions = [decideCall(calls[0]!, { keepCall: 0.1, keepResult: 0.1 }, options)];
+    const kept = applyDecisions(messages, decisions, calls, 300);
+
+    // The result message disappears with its call; the narrated turn stays,
+    // with the call gone and a note where the evidence used to be.
+    expect(kept).toHaveLength(3);
+    const narrated = kept[1]!;
+    expect(narrated.toolUses).toHaveLength(0);
+    expect(narrated.text).toContain('Read the config, then run the suite.');
+    expect(narrated.text).toContain(
+      '[fast-jev-compaction removed a tool call here (Read); the outcome is no longer in the history',
+    );
+  });
+
+  it('lists every dropped call of a message in the note and skips it when text is empty', () => {
+    const messages: Message[] = [
+      message('user', 'Ship it.'),
+      message('assistant', 'Ran the checks.', {
+        toolUses: [
+          { tool_use_id: 'c1', tool: 'Bash', input: { command: 'npm test' }, text: 'ok' },
+          { tool_use_id: 'c2', tool: 'Bash', input: { command: 'npm run lint' }, text: 'ok' },
+        ],
+      }),
+      message('user', '', {
+        toolResults: [
+          { tool_use_id: 'c1', text: 'ok' },
+          { tool_use_id: 'c2', text: 'ok' },
+        ],
+      }),
+      message('assistant', '', {
+        toolUses: [{ tool_use_id: 'c3', tool: 'Read', input: { file_path: 'b.ts' }, text: 'ok' }],
+      }),
+      message('user', '', { toolResults: [{ tool_use_id: 'c3', text: 'ok' }] }),
+    ];
+    const calls = collectToolCalls(messages, 0);
+    const decisions = calls.map((call) => decideCall(call, { keepCall: 0.1, keepResult: 0.1 }, options));
+    const kept = applyDecisions(messages, decisions, calls, 300);
+
+    // The narrated turn keeps its text and lists both dropped calls.
+    const narrated = kept[1]!;
+    expect(narrated.text).toContain(
+      '[fast-jev-compaction removed 2 tool calls here (Bash, Bash)',
+    );
+    // The call-only turn carries no narration, so it disappears entirely.
+    expect(kept.map((m) => m.text)).toEqual(['Ship it.', narrated.text]);
+  });
 });
 
 describe('compact', () => {

@@ -141,6 +141,17 @@ function truncatedResultText(text: string, isError: boolean, headChars: number):
 }
 
 /**
+ * The note left where a call was dropped but the message's own narration
+ * stays: without it the assistant reads back turns that report work with no
+ * tool call attached and continues the pattern (see issue #65).
+ */
+function droppedCallNote(dropped: readonly ToolUse[]): string {
+  const names = dropped.map((tool) => tool.tool).join(', ');
+  const count = dropped.length === 1 ? 'a tool call' : `${dropped.length} tool calls`;
+  return `\n[fast-jev-compaction removed ${count} here (${names}); the outcome is no longer in the history — re-run the tool if the result matters]`;
+}
+
+/**
  * Rebuilds the conversation from the decisions. A dropped call disappears
  * together with its result; a dropped result keeps a bounded head and note.
  * Messages that lose all their content are removed; untouched messages are
@@ -219,6 +230,12 @@ export function applyDecisions(
     }
     const rebuilt: Message = { role: message.role, text: message.text, toolUses };
     if (toolResults.length > 0) rebuilt.toolResults = toolResults;
+    const dropped = message.toolUses.filter(
+      (tool) => actions.get(tool.tool_use_id) === 'drop_call',
+    );
+    if (dropped.length > 0 && message.text.trim().length > 0) {
+      rebuilt.text += droppedCallNote(dropped);
+    }
     kept.push(rebuilt);
   }
   return kept;
