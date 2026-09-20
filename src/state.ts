@@ -15,6 +15,45 @@ export const STATE_CONTEXT =
 const INPUT_CHARS = [1000, 200, 60] as const;
 const TEXT_HEAD = 400;
 const TEXT_TAIL = 150;
+const REDACTED = '[REDACTED]';
+
+/** Credential-shaped keys that should never leave the process in Jev state. */
+const SENSITIVE_INPUT_KEY_SUFFIXES = [
+  'accesstoken',
+  'apikey',
+  'authtoken',
+  'clientsecret',
+  'credential',
+  'credentials',
+  'idtoken',
+  'password',
+  'passphrase',
+  'passwd',
+  'privatekey',
+  'refreshtoken',
+  'secret',
+  'secretaccesskey',
+  'accesskeyid',
+  'token',
+] as const;
+
+function isSensitiveInputKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (
+    normalized === 'auth' ||
+    normalized === 'authorization' ||
+    normalized === 'cookie' ||
+    normalized === 'proxyauthorization' ||
+    normalized === 'setcookie'
+  ) {
+    return true;
+  }
+  return SENSITIVE_INPUT_KEY_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+}
+
+function redactSensitiveInput(key: string, value: unknown): unknown {
+  return key.length > 0 && isSensitiveInputKey(key) ? REDACTED : value;
+}
 
 const TOKEN_PIECES = /[A-Za-z]+|\d+|[^\sA-Za-z\d]/g;
 
@@ -95,7 +134,7 @@ export function collectToolCalls(
 function inputText(input: Record<string, unknown>, limit: number): string {
   let json = '';
   try {
-    json = JSON.stringify(input);
+    json = JSON.stringify(input, redactSensitiveInput);
   } catch {
     json = '[unserializable input]';
   }
@@ -110,7 +149,9 @@ function resultNote(call: ToolCall): string {
 function compactCall(call: ToolCall): string {
   const input = Object.entries(call.input)
     .map(([key, value]) => {
-      const text = typeof value === 'string' ? value : inputText({ [key]: value }, 200);
+      const safeValue = redactSensitiveInput(key, value);
+      const text =
+        typeof safeValue === 'string' ? safeValue : inputText({ [key]: safeValue }, 200);
       return `${key}=${text.replace(/\s+/g, ' ')}`;
     })
     .join(' ');

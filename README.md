@@ -25,7 +25,8 @@ built-in compaction summary with the original messages.
    pinned and never touched.
 2. The **state** sent to Jev is the whole conversation so far, oldest first,
    with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
-   Tool inputs are included, texts are included, nothing is summarized.
+   Tool inputs are included with credential-shaped fields redacted, texts are
+   included, and nothing is summarized.
 3. The state is fitted into `maxStateTokens` (25k by default) in stages, each
    applied only if the previous one was not enough: tool inputs truncated to
    1000, then 200, then 60 characters; long texts abridged to head + tail,
@@ -124,6 +125,8 @@ stage was needed, and the number of requests.
   result is safe to delete. The assistant can always re-run the tool.
 - The full state is repeated with every request, so a history near the state
   ceiling costs one request per handful of questions.
+- Tool-input redaction is based on credential-shaped field names. Secrets in
+  free-form text or embedded inside command/content strings are not detected.
 
 ## Claude Code plugin
 
