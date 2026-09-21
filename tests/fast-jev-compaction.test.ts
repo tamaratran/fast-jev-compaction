@@ -10,6 +10,7 @@ import {
   estimateTokens,
   fitState,
   JevClient,
+  noulAnswer,
   parseJevResponse,
   reductionRatio,
   resolveOptions,
@@ -89,6 +90,8 @@ describe('options', () => {
       preserveRecentMessages: 2,
       truncateHeadChars: 0,
     });
+    expect(() => resolveOptions({ keepThreshold: -0.1 })).toThrow(/between 0 and 1/);
+    expect(() => resolveOptions({ keepThreshold: 1.1 })).toThrow(/between 0 and 1/);
   });
 });
 
@@ -115,8 +118,25 @@ describe('tool call collection', () => {
     expect(calls[0]?.resultChars).toBe(fileA.length);
   });
 
-  it('ignores calls without a result', () => {
+  it('does not score calls without a result', () => {
     expect(collectToolCalls([message('user', 'hi'), call('x', 'Read', {}, '')], 0)).toHaveLength(0);
+  });
+
+  it('rejects duplicate or reversed tool pairs', () => {
+    expect(() => collectToolCalls([
+      result('x', 'done'),
+      call('x', 'Read', {}, ''),
+    ], 0)).toThrow(/precedes/);
+    expect(() => collectToolCalls([
+      call('x', 'Read', {}, ''),
+      call('x', 'Read', {}, ''),
+      result('x', 'done'),
+    ], 0)).toThrow(/Duplicate tool call/);
+    expect(() => collectToolCalls([
+      call('x', 'Read', {}, ''),
+      result('x', 'done'),
+      result('x', 'done again'),
+    ], 0)).toThrow(/Duplicate tool result/);
   });
 });
 
@@ -159,6 +179,41 @@ describe('state fitting', () => {
     expect(tokens).toBeLessThanOrEqual(300);
     expect(state.history[0]?.text).toBe('start');
     expect((state.history[1]?.tool_calls?.[0] as HistoryToolCall).input.length).toBeLessThanOrEqual(200);
+  });
+
+  it('redacts credential-shaped tool input fields before sending Jev state', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const messages = [
+      message('user', 'start'),
+      call('w', 'Request', {
+        url: 'https://example.test',
+        authorization: 'Bearer secret-token',
+        apiKey: 'sk-live',
+        nested: { password: 'hunter2' },
+        cyclic,
+      }, 'ok'),
+      result('w', 'ok'),
+    ];
+    const { state } = fitState(messages, collectToolCalls(messages, 0), fit);
+    const json = JSON.stringify(state);
+    expect(json).toContain('https://example.test');
+    expect(json).toContain('[REDACTED]');
+    expect(json).not.toContain('secret-token');
+    expect(json).not.toContain('sk-live');
+    expect(json).not.toContain('hunter2');
+  });
+
+  it('keeps unresolved tool calls visible but unscored', () => {
+    const messages = [message('user', 'start'), call('pending-1', 'Read', { file_path: 'x.ts' }, '')];
+    const { state } = fitState(messages, collectToolCalls(messages, 0), fit);
+    expect(state.history[1]?.tool_calls).toEqual([{
+      id: 'pending:pending-1',
+      tool: 'Read',
+      input: '{"file_path":"x.ts"}',
+      result: 'pending result (not scored)',
+      pending: true,
+    }]);
   });
 
   it('shrinks old tool calls to one line each when nothing else is left to cut', () => {
@@ -312,6 +367,21 @@ describe('decisions', () => {
     expect(shortKept[3]).toBe(shortMessages[5]);
   });
 
+  it('marks assistant narration when its tool call is dropped', () => {
+    const messages = [
+      message('user', 'task'),
+      call('narrated', 'Bash', { command: 'gh issue create' }, 'created'),
+      result('narrated', 'created'),
+    ];
+    messages[1]!.text = 'I created the issue.';
+    const calls = collectToolCalls(messages, 0);
+    const decisions = [decideCall(calls[0]!, { keepCall: 0, keepResult: 0 }, { keepThreshold: 0.5 })];
+    const output = applyDecisions(messages, decisions, calls, 300);
+    expect(output).toHaveLength(2);
+    expect(output[1]?.text).toMatch(/I created the issue\.[\s\S]*removed tool call narrated \(Bash\)/);
+    expect(output[1]?.toolUses).toEqual([]);
+  });
+
   it('honours truncateHeadChars, including a zero head', () => {
     const messages = transcript();
     const calls = collectToolCalls(messages, 0);
@@ -369,7 +439,7 @@ describe('compact', () => {
     const messages = [message('user', 'hello'), message('assistant', 'hi')];
     const output = await compact(messages, fakeJev(() => 0, seen));
     expect(seen).toHaveLength(0);
-    expect(output.stats).toMatchObject({ requests: 0, stateStage: '', calls: 0 });
+    expect(output.stats).toMatchObject({ requests: 0, stateStage: '', calls: 0, candidates: 0 });
     expect(output.messages).toEqual(messages);
   });
 
@@ -407,7 +477,11 @@ describe('HTTP client', () => {
     expect(() => parseJevResponse(500, false, 'boom')).toThrow(/500/);
     expect(() => parseJevResponse(200, true, 'not json')).toThrow(/malformed/);
     expect(() => parseJevResponse(200, true, '{}')).toThrow(/missing answers/);
+    expect(() => parseJevResponse(200, true, '{"answers":[]}')).toThrow(/missing answers/);
     expect(parseJevResponse(200, true, '{"answers":{}}')).toEqual({ answers: {} });
+    expect(() => noulAnswer({ q: { type: 'choice', choice: 'x', confidence: 1, probabilities: {} } }, 'q')).toThrow(/Invalid Jev answer/);
+    expect(() => noulAnswer({ q: { noul: -0.1 } }, 'q')).toThrow(/Invalid Jev answer/);
+    expect(() => noulAnswer({ q: { noul: 1.1 } }, 'q')).toThrow(/Invalid Jev answer/);
   });
 
   it('asks over fetch and refuses to run without a key', async () => {
@@ -429,5 +503,27 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+
+  it('times out a stalled request and accepts caller cancellation', async () => {
+    const stalled = async (_url: string | URL | Request, init?: RequestInit) => {
+      await new Promise<never>((_resolve, reject) => {
+        if (init?.signal?.aborted) {
+          reject(new Error('aborted'));
+          return;
+        }
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+      throw new Error('unreachable');
+    };
+    await expect(
+      new JevClient({ apiKey: 'k', timeoutMs: 5, fetch: stalled as typeof fetch }).ask('s', {}),
+    ).rejects.toThrow(/timed out after 5ms/);
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      new JevClient({ apiKey: 'k', signal: controller.signal, fetch: stalled as typeof fetch }).ask('s', {}),
+    ).rejects.toThrow(/cancelled/);
   });
 });

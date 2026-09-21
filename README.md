@@ -55,6 +55,12 @@ built-in compaction summary with the original messages.
 
 Jev failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
+Answer envelopes and `noul` probabilities are validated before any transcript
+rewrite. Tool inputs are recursively redacted for credential-shaped fields
+before they are sent to Jev. Unresolved tool calls remain visible in the state
+as pending and are not scored. When a dropped call had assistant narration, the
+rebuilt message includes a marker so the narration is not mistaken for a
+retained execution.
 
 ## Install and usage
 
@@ -62,6 +68,8 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 npm install fast-jev-compaction
 export TYPESAFE_API_KEY=...
 ```
+
+The exported `dist/` files are built automatically during `npm pack`.
 
 ```ts
 import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';

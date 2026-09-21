@@ -30,10 +30,20 @@ function finite(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function probability(value: number, name: string): number {
+  if (value < 0 || value > 1) {
+    throw new Error(`${name} must be between 0 and 1`);
+  }
+  return value;
+}
+
 export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOptions {
   return {
     goal: options.goal ?? DEFAULT_OPTIONS.goal,
-    keepThreshold: finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold),
+    keepThreshold: probability(
+      finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold),
+      'keepThreshold',
+    ),
     preserveRecentMessages: Math.max(
       0,
       Math.floor(
@@ -140,6 +150,10 @@ function truncatedResultText(text: string, isError: boolean, headChars: number):
   }; re-run the tool if needed]`;
 }
 
+function droppedCallMarker(tool: ToolUse): string {
+  return `[fast-jev-compaction removed tool call ${tool.tool_use_id} (${tool.tool}); its execution is not retained in this history]`;
+}
+
 /**
  * Rebuilds the conversation from the decisions. A dropped call disappears
  * together with its result; a dropped result keeps a bounded head and note.
@@ -186,6 +200,9 @@ export function applyDecisions(
         if (tool.isError) copy.isError = true;
         return copy;
       });
+    const droppedCalls = message.toolUses.filter(
+      (tool) => actions.get(tool.tool_use_id) === 'drop_call',
+    );
     const toolResults = (message.toolResults ?? [])
       .filter((result) => actions.get(result.tool_use_id) !== 'drop_call')
       .map((result) => {
@@ -214,10 +231,14 @@ export function applyDecisions(
       kept.push(message);
       continue;
     }
-    if (message.text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
+    const text =
+      droppedCalls.length > 0 && message.text.trim().length > 0
+        ? `${message.text}\n${droppedCalls.map(droppedCallMarker).join('\n')}`
+        : message.text;
+    if (text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
       continue;
     }
-    const rebuilt: Message = { role: message.role, text: message.text, toolUses };
+    const rebuilt: Message = { role: message.role, text, toolUses };
     if (toolResults.length > 0) rebuilt.toolResults = toolResults;
     kept.push(rebuilt);
   }
@@ -296,6 +317,7 @@ export async function compact(
       charsBefore,
       charsAfter: kept.reduce((sum, message) => sum + messageChars(message), 0),
       calls: calls.length,
+      candidates: candidates.length,
       kept: count(decisions, 'kept'),
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),

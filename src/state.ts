@@ -63,17 +63,28 @@ export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
 ): ToolCall[] {
-  const results = new Map<string, { index: number; result: ToolResult }>();
+  const resultLocations = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
     for (const result of message.toolResults ?? []) {
-      results.set(result.tool_use_id, { index, result });
+      if (resultLocations.has(result.tool_use_id)) {
+        throw new Error(`Duplicate tool result id: ${result.tool_use_id}`);
+      }
+      resultLocations.set(result.tool_use_id, { index, result });
     }
   });
   const calls: ToolCall[] = [];
+  const seenCalls = new Set<string>();
   messages.forEach((message, callIndex) => {
     for (const tool of message.toolUses) {
-      const found = results.get(tool.tool_use_id);
+      if (seenCalls.has(tool.tool_use_id)) {
+        throw new Error(`Duplicate tool call id: ${tool.tool_use_id}`);
+      }
+      seenCalls.add(tool.tool_use_id);
+      const found = resultLocations.get(tool.tool_use_id);
       if (!found) continue;
+      if (found.index < callIndex) {
+        throw new Error(`Tool result precedes its call: ${tool.tool_use_id}`);
+      }
       calls.push({
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
@@ -95,11 +106,25 @@ export function collectToolCalls(
 function inputText(input: Record<string, unknown>, limit: number): string {
   let json = '';
   try {
-    json = JSON.stringify(input);
+    json = JSON.stringify(redactInput(input));
   } catch {
     json = '[unserializable input]';
   }
   return truncate(json, limit);
+}
+
+const SENSITIVE_INPUT_KEY = /(?:^|[_-])(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|passwd|cookie|credential|private[-_]?key)(?:$|[_-])/i;
+
+function redactInput(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((item) => redactInput(item, seen));
+  const copy: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    copy[key] = SENSITIVE_INPUT_KEY.test(key) ? '[REDACTED]' : redactInput(item, seen);
+  }
+  return copy;
 }
 
 function resultNote(call: ToolCall): string {
@@ -156,12 +181,23 @@ function historyEntries(
   const byMessage = callsByMessage(calls);
   const entries: HistoryEntry[] = [];
   messages.forEach((message, i) => {
-    const toolCalls = (byMessage.get(i) ?? []).map((call) => ({
+    const pairedCalls = byMessage.get(i) ?? [];
+    const pairedIds = new Set(pairedCalls.map((call) => call.tool_use_id));
+    const pendingCalls = message.toolUses
+      .filter((tool) => !pairedIds.has(tool.tool_use_id))
+      .map((tool) => ({
+        id: `pending:${tool.tool_use_id}`,
+        tool: tool.tool,
+        input: inputText(tool.input, inputChars),
+        result: 'pending result (not scored)',
+        pending: true,
+      }));
+    const toolCalls = pairedCalls.map((call) => ({
       id: call.id,
       tool: call.tool,
       input: inputText(call.input, inputChars),
       result: resultNote(call),
-    }));
+    })).concat(pendingCalls);
     if (message.text.trim().length === 0 && toolCalls.length === 0) return;
     const entry: HistoryEntry = { i, role: message.role, text: message.text };
     if (toolCalls.length > 0) entry.tool_calls = toolCalls;

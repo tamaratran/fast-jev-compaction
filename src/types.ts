@@ -68,6 +68,8 @@ export interface HistoryToolCall {
   tool: string;
   input: string;
   result: string;
+  /** True when the call has not produced a matching result yet. */
+  pending?: boolean;
 }
 
 export interface HistoryEntry {
@@ -126,6 +128,8 @@ export interface CompactResult {
     charsBefore: number;
     charsAfter: number;
     calls: number;
+    /** Paired, non-pinned calls that were eligible for Jev scoring. */
+    candidates: number;
     kept: number;
     resultsDropped: number;
     callsDropped: number;
