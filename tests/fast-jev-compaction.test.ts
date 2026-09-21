@@ -9,10 +9,14 @@ import {
   decideCall,
   estimateTokens,
   fitState,
+  goalFromMessages,
+  isMachineText,
   JevClient,
   parseJevResponse,
+  reductionBound,
   reductionRatio,
   resolveOptions,
+  truncatedResult,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -144,6 +148,22 @@ describe('state fitting', () => {
     expect(state.goal).toContain('go ahead');
   });
 
+  it('leaves host-written user text out of the goal', () => {
+    const messages = [
+      ...transcript(),
+      message('user', '<command-name>/compact</command-name>\n<command-message>compact</command-message>'),
+      message('user', '<local-command-stdout>Compacted </local-command-stdout>'),
+      message('user', '<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n</task-notification>'),
+      message('user', 'This session is being continued from a previous conversation that ran out of context. Summary: …'),
+      message('user', '  <system-reminder>files changed</system-reminder>'),
+    ];
+    expect(goalFromMessages(messages)).toBe(
+      'Never edit anything under src/generated. Fix the failing test.\ngo ahead',
+    );
+    expect(isMachineText('<bash-stdout>ok</bash-stdout>')).toBe(true);
+    expect(isMachineText('what does <command-name> do?')).toBe(false);
+  });
+
   it('truncates tool inputs before touching message text', () => {
     const messages = [
       message('user', 'start'),
@@ -181,6 +201,9 @@ describe('state fitting', () => {
       't1 Read file_path=/repo/src/module-0.ts → ok 1ch',
     );
     expect(compacted.state.history.at(-1)?.text).toBe('done');
+    expect(full.visible.size).toBe(40);
+    expect(compacted.visible.has('t1')).toBe(false);
+    expect(compacted.visible.size).toBeLessThan(40);
 
     const merged = fitState(messages, calls, {
       ...fit,
@@ -377,6 +400,90 @@ describe('compact', () => {
     const output = await compact(transcript(), fakeJev(() => 0.95), { preserveRecentMessages: 1 });
     expect(output.decisions.every((d) => d.action === 'keep')).toBe(true);
     expect(reductionRatio(output)).toBe(0);
+  });
+
+  it('reports what dropping every candidate would free, separately from what was freed', async () => {
+    const kept = await compact(transcript(), fakeJev(() => 0.95), { preserveRecentMessages: 1 });
+    const dropped = await compact(transcript(), fakeJev(() => 0), { preserveRecentMessages: 1 });
+    expect(kept.stats.candidateChars).toBe(dropped.stats.candidateChars);
+    expect(reductionBound(kept)).toBeGreaterThanOrEqual(reductionRatio(dropped));
+    expect(reductionBound(kept) - reductionRatio(dropped)).toBeLessThan(0.1);
+    expect(reductionBound(kept)).toBeGreaterThan(reductionRatio(kept));
+  });
+
+  it('does not ask again about a result an earlier round already cut, and says so in the state', async () => {
+    const first = await compact(
+      transcript(),
+      fakeJev((name) => (name.startsWith('call_') ? 0.9 : 0.1)),
+      { preserveRecentMessages: 1, truncateHeadChars: 40 },
+    );
+    expect(first.decisions.map((d) => d.action)).toEqual(['drop_result', 'drop_result', 'drop_result']);
+    const cutText = first.messages.find((m) => m.toolResults?.[0]?.tool_use_id === 'tool-1')?.toolResults?.[0]?.text ?? '';
+    expect(truncatedResult(cutText)).toEqual({ cut: fileA.length - 40, head: 40, original: fileA.length });
+
+    const seen: Seen[] = [];
+    const second = await compact(first.messages, fakeJev(() => 0.9, seen), {
+      preserveRecentMessages: 1,
+      truncateHeadChars: 40,
+    });
+    // t3's result was short enough to survive round 1 whole, so it is still asked about
+    expect(seen[0]?.questions).toEqual(['call_t1', 'call_t2', 'call_t3', 'result_t3']);
+    expect(second.decisions.map((d) => [d.action, d.keepResult])).toEqual([
+      ['drop_result', 0],
+      ['drop_result', 0],
+      ['keep', 0.9],
+    ]);
+    expect(second.messages).toEqual(first.messages);
+    const entry = (seen[0]?.state as { history: { tool_calls?: HistoryToolCall[] }[] }).history[1];
+    expect(entry?.tool_calls?.[0]?.result).toBe(
+      `ok, ${fileA.length} chars originally; an earlier compaction cut it to a 40-char head`,
+    );
+  });
+
+  it('cuts host notices under the user role to a head by rule, and leaves prompts and summaries whole', async () => {
+    const notice = `<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n<result>${'x'.repeat(2000)}</result>\n</task-notification>`;
+    const summary = `This session is being continued from a previous conversation. ${'y'.repeat(2000)}`;
+    const prompt = `please keep every one of these words ${'z'.repeat(2000)}`;
+    const messages = [
+      message('user', 'start'),
+      message('user', notice),
+      message('user', summary),
+      message('user', prompt),
+      message('assistant', 'ok'),
+      message('user', notice),
+    ];
+    const output = await compact(messages, fakeJev(() => 0), { preserveRecentMessages: 1, truncateHeadChars: 50 });
+    expect(output.stats.noticesTruncated).toBe(1);
+    expect(output.messages[1]?.text).toBe(
+      `${notice.slice(0, 50)}\n[fast-jev-compaction truncated ${notice.length - 50} chars of this host notice; the full text is in the session transcript]`,
+    );
+    expect(output.messages[2]).toBe(messages[2]);
+    expect(output.messages[3]).toBe(messages[3]);
+    expect(output.messages[5]).toBe(messages[5]);
+    expect(output.stats.candidateChars).toBe(notice.length - 50);
+    expect(reductionRatio(output)).toBeGreaterThan(0.2);
+
+    const again = await compact(output.messages, fakeJev(() => 0), { preserveRecentMessages: 1, truncateHeadChars: 50 });
+    expect(again.stats.noticesTruncated).toBe(0);
+    expect(again.messages[1]).toBe(output.messages[1]);
+  });
+
+  it('counts candidates the fitted state no longer shows, and keeps them on request', async () => {
+    const messages = [message('user', 'start')];
+    for (let i = 0; i < 40; i += 1) {
+      messages.push(call(`c${i}`, 'Read', { file_path: `/repo/src/module-${i}.ts` }, 'x'), result(`c${i}`, 'x'));
+    }
+    messages.push(message('assistant', 'done'));
+    const full = fitState(messages, collectToolCalls(messages, 1), { ...fit, preserveRecentMessages: 1 });
+    const tight = { preserveRecentMessages: 1, maxStateTokens: Math.floor(full.tokens * 0.8) };
+    const applied = await compact(messages, fakeJev(() => 0), tight);
+    expect(applied.stats.stateStage).toBe('old calls compacted');
+    expect(applied.stats.unscored).toBeGreaterThan(0);
+    expect(applied.stats.callsDropped).toBe(40);
+    const held = await compact(messages, fakeJev(() => 0), { ...tight, keepUnscored: true });
+    expect(held.stats.unscored).toBe(applied.stats.unscored);
+    expect(held.decisions.filter((d) => d.reason === 'unscored')).toHaveLength(held.stats.unscored);
+    expect(held.stats.callsDropped).toBe(40 - held.stats.unscored);
   });
 
   it('rejects malformed answers', async () => {

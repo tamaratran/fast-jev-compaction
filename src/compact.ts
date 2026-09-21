@@ -1,5 +1,5 @@
 import { noulAnswer } from './request.js';
-import { collectToolCalls, estimateTokens, fitState } from './state.js';
+import { collectToolCalls, estimateTokens, fitState, isMachineText, isPinned } from './state.js';
 import type {
   CallAnswer,
   CallDecision,
@@ -21,6 +21,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  keepUnscored: false,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,21 +50,29 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    keepUnscored: options.keepUnscored ?? DEFAULT_OPTIONS.keepUnscored,
   };
 }
 
-/** The two `noul` questions asked about one call: keep the call, keep its result. */
+/**
+ * The `noul` questions asked about one call: keep the call, keep its result.
+ * A result an earlier round already cut to a head is not asked about again;
+ * there is no full output left to keep.
+ */
 export function questionsFor(call: ToolCall): JevQuestions {
-  return {
+  const questions: JevQuestions = {
     [`call_${call.id}`]: {
       type: 'noul',
       instructions: `Tool call ${call.id} (${call.tool}) should stay in the history: knowing this call was made, with its input, still matters for what the assistant does next`,
     },
-    [`result_${call.id}`]: {
+  };
+  if (call.originalChars === undefined) {
+    questions[`result_${call.id}`] = {
       type: 'noul',
       instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do`,
-    },
-  };
+    };
+  }
+  return questions;
 }
 
 /**
@@ -126,7 +135,8 @@ async function askBatch(
       call.id,
       {
         keepCall: noulAnswer(answers, `call_${call.id}`),
-        keepResult: noulAnswer(answers, `result_${call.id}`),
+        keepResult:
+          call.originalChars === undefined ? noulAnswer(answers, `result_${call.id}`) : 0,
       },
     ]),
   );
@@ -138,6 +148,46 @@ function truncatedResultText(text: string, isError: boolean, headChars: number):
   return `${head}[fast-jev-compaction truncated ${text.length - headChars} chars of this tool result${
     isError ? ' (error)' : ''
   }; re-run the tool if needed]`;
+}
+
+const NOTICE_NOTE_START = '[fast-jev-compaction truncated ';
+const NOTICE_NOTE_END = ' chars of this host notice; the full text is in the session transcript]';
+
+/**
+ * Host notices (task notifications, command echoes, reminders) are written
+ * under the user role but are not the user's words, and they are re-derivable
+ * from what the assistant did next. Outside the pinned messages they keep a
+ * head and a note, by rule; no question is asked. A previous compaction's
+ * summary is machine text too, but it is the only copy of what it summarised,
+ * so it stays whole.
+ */
+export function truncateHostNotices(
+  messages: readonly Message[],
+  options: Pick<ResolvedCompactOptions, 'preserveRecentMessages' | 'truncateHeadChars'>,
+): { messages: Message[]; truncated: number; charsCut: number } {
+  let truncated = 0;
+  let charsCut = 0;
+  const headChars = options.truncateHeadChars;
+  const out = messages.map((message, index) => {
+    if (message.role !== 'user' || (message.toolResults ?? []).length > 0) return message;
+    if (isPinned(index, messages.length, options.preserveRecentMessages)) return message;
+    if (!isMachineText(message.text) || message.text.trimStart().startsWith('This session is being continued')) {
+      return message;
+    }
+    if (message.text.length <= headChars + 120 || message.text.trimEnd().endsWith(NOTICE_NOTE_END)) {
+      return message;
+    }
+    const cut = message.text.length - headChars;
+    truncated += 1;
+    charsCut += cut;
+    const head = headChars > 0 ? `${message.text.slice(0, headChars)}\n` : '';
+    return {
+      role: message.role,
+      text: `${head}${NOTICE_NOTE_START}${cut}${NOTICE_NOTE_END}`,
+      toolUses: message.toolUses,
+    };
+  });
+  return { messages: out, truncated, charsCut };
 }
 
 /**
@@ -243,6 +293,20 @@ export function reductionRatio(result: Pick<CompactResult, 'stats'>): number {
   return charsBefore === 0 ? 0 : (charsBefore - charsAfter) / charsBefore;
 }
 
+/** The reduction dropping every candidate would give: the most a round can free. */
+export function reductionBound(result: Pick<CompactResult, 'stats'>): number {
+  const { charsBefore, candidateChars } = result.stats;
+  return charsBefore === 0 ? 0 : candidateChars / charsBefore;
+}
+
+function inputChars(call: Pick<ToolCall, 'input'>): number {
+  try {
+    return JSON.stringify(call.input).length;
+  } catch {
+    return 20;
+  }
+}
+
 function count(decisions: readonly CallDecision[], reason: CallDecision['reason']): number {
   return decisions.filter((decision) => decision.reason === reason).length;
 }
@@ -265,7 +329,11 @@ export async function compact(
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
-  let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
+  let fitted: { tokens: number; stage: string; visible: Set<string> } = {
+    tokens: 0,
+    stage: '',
+    visible: new Set(),
+  };
   let batches: ToolCall[][] = [];
   const answers = new Map<string, CallAnswer>();
   if (candidates.length > 0) {
@@ -278,15 +346,19 @@ export async function compact(
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }
 
-  const decisions = calls.map((call) =>
-    decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
+  const unscored = candidates.filter((call) => !fitted.visible.has(call.id));
+  const decisions = calls.map((call) => {
+    const answer = answers.get(call.id) ?? { keepCall: 1, keepResult: 1 };
+    if (resolved.keepUnscored && !call.pinned && !fitted.visible.has(call.id)) {
+      return { id: call.id, tool: call.tool, ...answer, action: 'keep' as const, reason: 'unscored' as const };
+    }
+    return decideCall(call, answer, resolved);
+  });
+  const notices = truncateHostNotices(
+    applyDecisions(messages, decisions, calls, resolved.truncateHeadChars),
+    resolved,
   );
-  const kept = applyDecisions(
-    messages,
-    decisions,
-    calls,
-    resolved.truncateHeadChars,
-  );
+  const kept = notices.messages;
   return {
     messages: kept,
     decisions,
@@ -300,6 +372,11 @@ export async function compact(
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
       pinned: count(decisions, 'pinned'),
+      candidateChars:
+        candidates.reduce((sum, call) => sum + inputChars(call) + call.resultChars, 0) +
+        notices.charsCut,
+      unscored: unscored.length,
+      noticesTruncated: notices.truncated,
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
       requests: batches.length,

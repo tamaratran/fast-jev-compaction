@@ -55,6 +55,24 @@ export function isPinned(
   return index === 0 || index >= total - preserveRecentMessages;
 }
 
+const TRUNCATED_NOTE =
+  /\[fast-jev-compaction truncated (\d+) chars of this tool result(?: \(error\))?; re-run the tool if needed\]$/;
+
+/**
+ * What an earlier round left of a result, read off its note: the characters
+ * cut, the head kept, and the original length. Undefined for a result still whole.
+ */
+export function truncatedResult(
+  text: string,
+): { cut: number; head: number; original: number } | undefined {
+  const trimmed = text.trimEnd();
+  const match = TRUNCATED_NOTE.exec(trimmed);
+  if (!match) return undefined;
+  const cut = Number(match[1]);
+  const head = trimmed.slice(0, match.index).replace(/\n$/, '').length;
+  return { cut, head, original: cut + head };
+}
+
 /**
  * Pairs every tool_use with its tool_result by `tool_use_id`. Calls without a
  * result are not candidates (there is nothing to drop yet).
@@ -74,7 +92,7 @@ export function collectToolCalls(
     for (const tool of message.toolUses) {
       const found = results.get(tool.tool_use_id);
       if (!found) continue;
-      calls.push({
+      const call: ToolCall = {
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
         tool: tool.tool,
@@ -86,7 +104,13 @@ export function collectToolCalls(
         pinned:
           isPinned(callIndex, messages.length, preserveRecentMessages) ||
           isPinned(found.index, messages.length, preserveRecentMessages),
-      });
+      };
+      const cut = truncatedResult(found.result.text);
+      if (cut) {
+        call.originalChars = cut.original;
+        call.headChars = cut.head;
+      }
+      calls.push(call);
     }
   });
   return calls;
@@ -103,7 +127,19 @@ function inputText(input: Record<string, unknown>, limit: number): string {
 }
 
 function resultNote(call: ToolCall): string {
-  return `${call.isError ? 'error' : 'ok'}, ${call.resultChars} chars (omitted)`;
+  const status = call.isError ? 'error' : 'ok';
+  if (call.originalChars !== undefined) {
+    return `${status}, ${call.originalChars} chars originally; an earlier compaction cut it to a ${call.headChars ?? 0}-char head`;
+  }
+  return `${status}, ${call.resultChars} chars (omitted)`;
+}
+
+function resultTag(call: ToolCall): string {
+  const status = call.isError ? 'error' : 'ok';
+  if (call.originalChars !== undefined) {
+    return `${status} ${call.originalChars}ch, cut earlier`;
+  }
+  return `${status} ${call.resultChars}ch`;
 }
 
 /** One call as a single line, for when the structured form is too costly. */
@@ -114,9 +150,7 @@ function compactCall(call: ToolCall): string {
       return `${key}=${text.replace(/\s+/g, ' ')}`;
     })
     .join(' ');
-  return `${call.id} ${call.tool} ${truncate(input, INPUT_CHARS[2])} → ${
-    call.isError ? 'error' : 'ok'
-  } ${call.resultChars}ch`;
+  return `${call.id} ${call.tool} ${truncate(input, INPUT_CHARS[2])} → ${resultTag(call)}`;
 }
 
 /**
@@ -136,6 +170,17 @@ function mergeCallRuns(history: readonly HistoryEntry[], pinned: (e: HistoryEntr
     merged.push({ ...entry });
   }
   return merged;
+}
+
+/** Ids of the calls a history still carries in structured form. */
+function visibleCalls(history: readonly HistoryEntry[]): Set<string> {
+  const visible = new Set<string>();
+  for (const entry of history) {
+    for (const call of entry.tool_calls ?? []) {
+      if (typeof call !== 'string') visible.add(call.id);
+    }
+  }
+  return visible;
 }
 
 function callsByMessage(calls: readonly ToolCall[]): Map<number, ToolCall[]> {
@@ -170,14 +215,38 @@ function historyEntries(
   return entries;
 }
 
-/** The last three user prompts, as the default `goal`. */
+/**
+ * Prefixes of user-role text the host writes rather than the user: command
+ * echoes, subagent and task notifications, injected reminders, and the
+ * summary a previous built-in compaction left behind.
+ */
+const MACHINE_TEXT_PREFIXES = [
+  '<command-name>',
+  '<command-message>',
+  '<local-command-',
+  '<task-notification>',
+  '<system-reminder>',
+  '<bash-input>',
+  '<bash-stdout>',
+  '<bash-stderr>',
+  'This session is being continued from a previous conversation',
+] as const;
+
+/** Whether a user-role text was written by the host, not typed by the user. */
+export function isMachineText(text: string): boolean {
+  const head = text.trimStart();
+  return MACHINE_TEXT_PREFIXES.some((prefix) => head.startsWith(prefix));
+}
+
+/** The last three prompts the user typed, as the default `goal`. */
 export function goalFromMessages(messages: readonly Message[]): string {
   return messages
     .filter(
       (message) =>
         message.role === 'user' &&
         message.text.trim().length > 0 &&
-        (message.toolResults ?? []).length === 0,
+        (message.toolResults ?? []).length === 0 &&
+        !isMachineText(message.text),
     )
     .slice(-3)
     .map((message) => truncate(message.text, 500))
@@ -209,6 +278,7 @@ export function fitState(
     state: stateOf(history),
     tokens,
     stage,
+    visible: visibleCalls(history),
   });
 
   let history: HistoryEntry[] = [];
