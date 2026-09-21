@@ -312,6 +312,18 @@ describe('decisions', () => {
     expect(shortKept[3]).toBe(shortMessages[5]);
   });
 
+  it('drops empty assistant messages but keeps thinking-only text', () => {
+    const empty = message('assistant', '');
+    const thinking = message('assistant', 'thinking through the next step');
+    const messages = [message('user', 'start'), empty, thinking, message('user', 'done')];
+
+    expect(applyDecisions(messages, [], [], 300)).toEqual([
+      messages[0],
+      thinking,
+      messages[3],
+    ]);
+  });
+
   it('honours truncateHeadChars, including a zero head', () => {
     const messages = transcript();
     const calls = collectToolCalls(messages, 0);
