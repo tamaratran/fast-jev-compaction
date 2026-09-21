@@ -1,13 +1,13 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "title": "Jev API key",
+      "description": "Vercel AI Gateway or TypeSafe key. Leave unset to use AI_GATEWAY_API_KEY, then TYPESAFE_API_KEY.",
       "sensitive": true
     },
     "keepThreshold": {
@@ -55,8 +55,18 @@
     "model": {
       "type": "string",
       "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
-      "default": "jev-latest"
+      "description": "Jev model id: the Gateway spelling (typesafe-ai/jev) or the System One name (jev-latest). Leave unset to take the chosen API’s default."
+    },
+    "provider": {
+      "type": "string",
+      "title": "Jev API",
+      "description": "Which API to call Jev through: \"gateway\" (Vercel AI Gateway), \"systemone\" (TypeSafe), or \"auto\" to pick from the key and the model.",
+      "default": "auto"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Jev endpoint",
+      "description": "Endpoint override for either API. Leave unset to take the chosen API’s default URL."
     }
   }
 }

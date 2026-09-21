@@ -9,7 +9,13 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
-import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import {
+  buildJevRequest,
+  DEFAULT_MODEL,
+  parseJevResponse,
+  SYSTEM_ONE_URL,
+} from '../src/request.js';
+import { GATEWAY_MODEL, GATEWAY_URL, gatewayAsker } from './gateway-asker.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -22,7 +28,23 @@ import type {
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
-  model: DEFAULT_MODEL,
+  provider: 'auto' as ProviderSetting,
+};
+
+/**
+ * Which Jev API the hook talks to. `systemone` is TypeSafe's own endpoint (what
+ * the library in `src/` speaks); `gateway` is the Vercel AI Gateway's
+ * evaluation-model endpoint. `auto` picks one from the key and the model.
+ */
+export type JevProvider = 'gateway' | 'systemone';
+export type ProviderSetting = JevProvider | 'auto';
+
+/** Where the key came from; `auto` reads it as which API the install is set up for. */
+export type KeySource = 'gateway-env' | 'typesafe-env' | 'option' | 'none';
+
+export const PROVIDER_DEFAULTS: Record<JevProvider, { model: string; url: string }> = {
+  gateway: { model: GATEWAY_MODEL, url: GATEWAY_URL },
+  systemone: { model: DEFAULT_MODEL, url: SYSTEM_ONE_URL },
 };
 
 export type HookFetchInit = {
@@ -44,7 +66,19 @@ export type HookConfig = CompactOptions & {
   apiKey?: string;
   compactAtPercent: number;
   minReductionRatio: number;
+  /** Which API to talk to; `auto` decides from the key and the model. */
+  provider: ProviderSetting;
+  /** Unset takes the chosen provider's default model. */
+  model?: string;
+  /** Unset takes the chosen provider's default endpoint. */
+  baseUrl?: string;
+};
+
+/** The API, model and endpoint one compaction actually uses. */
+export type JevTarget = {
+  provider: JevProvider;
   model: string;
+  url: string;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -78,8 +112,12 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       'minReductionRatio',
       HOOK_DEFAULTS.minReductionRatio,
     ),
-    model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    provider: optionProvider(options),
   };
+  const model = optionString(options, 'model');
+  if (model) config.model = model;
+  const baseUrl = optionString(options, 'baseUrl');
+  if (baseUrl) config.baseUrl = baseUrl;
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
@@ -87,11 +125,65 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   return config;
 }
 
-/** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+/** An unknown `provider` value is treated as `auto` rather than failing the install. */
+function optionProvider(options: PluginOptions): ProviderSetting {
+  const value = optionString(options, 'provider')?.toLowerCase();
+  if (value === 'gateway' || value === 'vercel') return 'gateway';
+  if (value === 'systemone' || value === 'system-one' || value === 'typesafe') return 'systemone';
+  return HOOK_DEFAULTS.provider;
+}
+
+/**
+ * Which API a compaction goes to, plus the model and endpoint for it.
+ *
+ * A configured `provider` always wins. Otherwise the key decides: a key read
+ * from `AI_GATEWAY_API_KEY` is a Gateway key and one read from
+ * `TYPESAFE_API_KEY` is a System One key. Only when the key carries no such
+ * hint — it came from the `apiKey` plugin option, or there is none — does the
+ * model id break the tie: Gateway ids are namespaced (`typesafe-ai/jev`) where
+ * System One names are bare (`jev-latest`). With nothing to go on the Gateway
+ * is the default, which is what a fresh install of this plugin is set up for.
+ */
+export function resolveTarget(config: HookConfig, keySource: KeySource = 'none'): JevTarget {
+  const provider =
+    config.provider !== 'auto'
+      ? config.provider
+      : keySource === 'gateway-env'
+        ? 'gateway'
+        : keySource === 'typesafe-env'
+          ? 'systemone'
+          : config.model
+            ? config.model.includes('/')
+              ? 'gateway'
+              : 'systemone'
+            : 'gateway';
+  const defaults = PROVIDER_DEFAULTS[provider];
+  return {
+    provider,
+    model: config.model ?? defaults.model,
+    url: config.baseUrl ?? defaults.url,
+  };
+}
+
+/** The asker for a resolved target: the Gateway adapter, or System One directly. */
+export function createAsker(fetchFn: HookFetch, apiKey: string, target: JevTarget): JevAsker {
+  return target.provider === 'gateway'
+    ? gatewayAsker(fetchFn, apiKey, target.model, target.url)
+    : jevAsker(fetchFn, apiKey, target.model, target.url);
+}
+
+/** A `JevAsker` over the engine's `$.http.fetch`, speaking TypeSafe's System One. */
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string = DEFAULT_MODEL,
+  baseUrl: string = SYSTEM_ONE_URL,
+): JevAsker {
+  if (!apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
+
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -161,14 +253,13 @@ export type SessionCompaction = {
   messages: SessionMessage[];
 };
 
-/** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
+/** Runs the library over a session transcript; throws when the Jev request fails. */
 export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
-  fetchFn: HookFetch,
+  asker: JevAsker,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const result = await compact(messages, asker, config);
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -224,24 +315,57 @@ export function decisionLogLines(
   );
 }
 
+export type ResolvedKey = { apiKey?: string; source: KeySource };
+
+/**
+ * The key, and which name it came from. The name is what `auto` reads as the
+ * API the install is set up for, so the two travel together.
+ *
+ * `AI_GATEWAY_API_KEY` is looked at first and `TYPESAFE_API_KEY` second, which
+ * is also the order a machine set up for both resolves in; a `provider` option
+ * overrides that. Each name is spelled out because `$.env.get` takes a literal,
+ * so the host can list which variables this module reads.
+ */
 async function getApiKey(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
     settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
   },
   config: HookConfig,
-): Promise<string | undefined> {
-  if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
-  if (fromEnv) return fromEnv;
+): Promise<ResolvedKey> {
+  if (config.apiKey) return { apiKey: config.apiKey, source: 'option' };
+  // A configured provider decides which name to try first, so an install
+  // pointed at System One on a machine that also has a Gateway key still
+  // picks up its own credential.
+  const names: readonly KeyName[] =
+    config.provider === 'systemone'
+      ? [TYPESAFE_KEY, GATEWAY_KEY]
+      : [GATEWAY_KEY, TYPESAFE_KEY];
+  for (const name of names) {
+    const value =
+      name === GATEWAY_KEY
+        ? await $.env.get('AI_GATEWAY_API_KEY')
+        : await $.env.get('TYPESAFE_API_KEY');
+    if (value) return { apiKey: value, source: KEY_SOURCES[name] };
+  }
   const settings = await $.settings.read();
   const env = settings['env'];
   if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
-    if (typeof value === 'string' && value) return value;
+    for (const name of names) {
+      const value = (env as Record<string, unknown>)[name];
+      if (typeof value === 'string' && value) return { apiKey: value, source: KEY_SOURCES[name] };
+    }
   }
-  return undefined;
+  return { source: 'none' };
 }
+
+const GATEWAY_KEY = 'AI_GATEWAY_API_KEY';
+const TYPESAFE_KEY = 'TYPESAFE_API_KEY';
+type KeyName = typeof GATEWAY_KEY | typeof TYPESAFE_KEY;
+const KEY_SOURCES: Record<KeyName, KeySource> = {
+  [GATEWAY_KEY]: 'gateway-env',
+  [TYPESAFE_KEY]: 'typesafe-env',
+};
 
 function notify(
   $: {
@@ -262,11 +386,20 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
-        return { status: response.status, ok: response.ok, text: response.text };
-      });
+      const { apiKey, source } = await getApiKey($, configured);
+      const config = { ...configured, apiKey };
+      const target = resolveTarget(config, source);
+      const asker = createAsker(
+        async (url, init) => {
+          const response = await $.http.fetch(url, init);
+          return { status: response.status, ok: response.ok, text: response.text };
+        },
+        apiKey ?? '',
+        target,
+      );
+      // Logged before the request, so a failure below says which API it went to.
+      $.ui.log(`jev via ${target.provider} (${target.model})`);
+      const { result, messages } = await compactSession(event.messages, config, asker);
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
