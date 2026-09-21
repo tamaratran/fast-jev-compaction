@@ -269,9 +269,12 @@ export const register: Register = (on: On, options: PluginOptions) => {
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
+        const reason = result.stats.candidates === 0
+          ? 'no eligible tool calls remain'
+          : `below ${percent(config.minReductionRatio)} minimum`;
         notify(
           $,
-          `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
+          `fallback to built-in summary (${reason}: ${summarize(result)})`,
         );
         return next(event);
       }

@@ -53,9 +53,11 @@ export function parseJevResponse(
   if (
     parsed === null ||
     typeof parsed !== 'object' ||
+    Array.isArray(parsed) ||
     !('answers' in parsed) ||
     parsed.answers === null ||
-    typeof parsed.answers !== 'object'
+    typeof parsed.answers !== 'object' ||
+    Array.isArray(parsed.answers)
   ) {
     throw new Error('Jev response is missing answers');
   }
@@ -70,9 +72,14 @@ export function noulAnswer(
   const answer = answers[name];
   if (
     !answer ||
+    typeof answer !== 'object' ||
+    Array.isArray(answer) ||
+    ('type' in answer && answer.type !== undefined && answer.type !== 'noul') ||
     !('noul' in answer) ||
     typeof answer.noul !== 'number' ||
-    !Number.isFinite(answer.noul)
+    !Number.isFinite(answer.noul) ||
+    answer.noul < 0 ||
+    answer.noul > 1
   ) {
     throw new Error(`Invalid Jev answer for ${name}`);
   }
