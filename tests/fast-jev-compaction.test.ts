@@ -269,6 +269,36 @@ describe('decisions', () => {
     });
   });
 
+  it('stubs instead of dropping the call when dropCalls is false', () => {
+    const noDrop = { keepThreshold: 0.5, dropCalls: false };
+    expect(decideCall(unpinned, { keepCall: 0.1, keepResult: 0.2 }, noDrop)).toMatchObject({
+      action: 'stub_call',
+      reason: 'call_stubbed',
+    });
+    expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.2 }, noDrop).action).toBe('drop_result');
+    expect(decideCall(unpinned, { keepCall: 0.1, keepResult: 0.2 }, { ...noDrop, dropCalls: true }).action).toBe('drop_call');
+  });
+
+  it('a stubbed call keeps its tool name and truncates input and result', () => {
+    const long = 'x'.repeat(2000);
+    const messages: Message[] = [
+      { role: 'user', text: 'go', toolUses: [] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'u1', tool: 'Bash', input: { command: long }, text: long }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'u1', text: long }] },
+      { role: 'assistant', text: 'done', toolUses: [] },
+    ];
+    const calls = collectToolCalls(messages, 0);
+    const decisions = calls.map((call) => decideCall(call, { keepCall: 0.1, keepResult: 0.1 }, { keepThreshold: 0.5, dropCalls: false }));
+    const out = applyDecisions(messages, decisions, calls, 100);
+    expect(out).toHaveLength(4);
+    const use = out[1]!.toolUses[0]!;
+    expect(use.tool).toBe('Bash');
+    expect(JSON.stringify(use.input).length).toBeLessThan(400);
+    expect(String((use.input as { note?: string }).note)).toMatch(/truncated \d+ chars of this tool input/);
+    expect(use.text).toMatch(/truncated \d+ chars of this tool result/);
+    expect(out[2]!.toolResults![0]!.text).toMatch(/truncated \d+ chars of this tool result/);
+  });
+
   it('removes dropped calls and truncates dropped results', () => {
     const messages = transcript();
     messages[4]!.toolUses[0]!.text = 'x'.repeat(2000);

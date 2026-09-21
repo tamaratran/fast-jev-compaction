@@ -21,6 +21,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  dropCalls: true,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,6 +50,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    dropCalls: typeof options.dropCalls === 'boolean' ? options.dropCalls : DEFAULT_OPTIONS.dropCalls,
   };
 }
 
@@ -101,7 +103,7 @@ export function batchCalls(
 export function decideCall(
   call: Pick<ToolCall, 'id' | 'tool' | 'pinned'>,
   answer: CallAnswer,
-  options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
+  options: Pick<ResolvedCompactOptions, 'keepThreshold'> & Partial<Pick<ResolvedCompactOptions, 'dropCalls'>>,
 ): CallDecision {
   const base = { id: call.id, tool: call.tool, ...answer };
   if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
@@ -110,6 +112,9 @@ export function decideCall(
   }
   if (answer.keepCall >= options.keepThreshold) {
     return { ...base, action: 'drop_result', reason: 'result_dropped' };
+  }
+  if (options.dropCalls === false) {
+    return { ...base, action: 'stub_call', reason: 'call_stubbed' };
   }
   return { ...base, action: 'drop_call', reason: 'call_dropped' };
 }
@@ -140,9 +145,19 @@ function truncatedResultText(text: string, isError: boolean, headChars: number):
   }; re-run the tool if needed]`;
 }
 
+function truncatedInput(input: Record<string, unknown>, headChars: number): Record<string, unknown> {
+  const json = JSON.stringify(input);
+  if (json.length <= headChars + 120) return input;
+  return {
+    input_head: json.slice(0, headChars),
+    note: `[fast-jev-compaction truncated ${json.length - headChars} chars of this tool input]`,
+  };
+}
+
 /**
  * Rebuilds the conversation from the decisions. A dropped call disappears
- * together with its result; a dropped result keeps a bounded head and note.
+ * together with its result; a dropped result keeps a bounded head and note;
+ * a stubbed call keeps its tool name with input and result both cut to a head.
  * Messages that lose all their content are removed; untouched messages are
  * returned as the same objects they came in as.
  */
@@ -170,17 +185,19 @@ export function applyDecisions(
     const toolUses = message.toolUses
       .filter((tool) => actions.get(tool.tool_use_id) !== 'drop_call')
       .map((tool) => {
-        if (actions.get(tool.tool_use_id) !== 'drop_result') return tool;
+        const action = actions.get(tool.tool_use_id);
+        if (action !== 'drop_result' && action !== 'stub_call') return tool;
         const text = truncatedResultText(
           tool.text ?? '',
           tool.isError ?? false,
           headChars,
         );
-        if ((tool.text ?? '') === text) return tool;
+        const input = action === 'stub_call' ? truncatedInput(tool.input, headChars) : tool.input;
+        if ((tool.text ?? '') === text && input === tool.input) return tool;
         const copy: ToolUse = {
           tool_use_id: tool.tool_use_id,
           tool: tool.tool,
-          input: tool.input,
+          input,
           text,
         };
         if (tool.isError) copy.isError = true;
@@ -189,7 +206,8 @@ export function applyDecisions(
     const toolResults = (message.toolResults ?? [])
       .filter((result) => actions.get(result.tool_use_id) !== 'drop_call')
       .map((result) => {
-        if (actions.get(result.tool_use_id) !== 'drop_result') return result;
+        const action = actions.get(result.tool_use_id);
+        if (action !== 'drop_result' && action !== 'stub_call') return result;
         const text = truncatedResultText(result.text, result.isError ?? false, headChars);
         return text === result.text
           ? result
@@ -299,6 +317,7 @@ export async function compact(
       kept: count(decisions, 'kept'),
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
+      callsStubbed: count(decisions, 'call_stubbed'),
       pinned: count(decisions, 'pinned'),
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
