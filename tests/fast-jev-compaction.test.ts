@@ -380,13 +380,64 @@ describe('decisions', () => {
     const decisions = calls.map((call) => decideCall(call, { keepCall: 0.1, keepResult: 0.1 }, options));
     const kept = applyDecisions(messages, decisions, calls, 300);
 
-    // The narrated turn keeps its text and lists both dropped calls.
+    // The narrated turn keeps its text and lists every dropped call of the
+    // turn: its own two, plus the one credited back from the call-only turn.
     const narrated = kept[1]!;
     expect(narrated.text).toContain(
-      '[fast-jev-compaction removed 2 tool calls here (Bash, Bash)',
+      '[fast-jev-compaction removed 3 tool calls here (Bash, Bash, Read)',
     );
     // The call-only turn carries no narration, so it disappears entirely.
     expect(kept.map((m) => m.text)).toEqual(['Ship it.', narrated.text]);
+  });
+
+  it('credits the note to the narration message when the turn arrives as separate blocks', () => {
+    // Claude Code hands session.compact one message per content block: the
+    // narration, then a message per tool call, then a message per result.
+    const messages: Message[] = [
+      message('user', 'Fix the failing test.'),
+      message('assistant', 'Read the config, then run the suite.'),
+      call('c1', 'Read', { file_path: 'a.ts' }, 'x'.repeat(50)),
+      result('c1', 'x'.repeat(50)),
+      call('c2', 'Bash', { command: 'npm test' }, 'ok'),
+      result('c2', 'FAIL'),
+      message('assistant', 'The suite fails; fixing now.'),
+      message('user', 'go ahead'),
+    ];
+    const calls = collectToolCalls(messages, 0);
+    const decisions = calls.map((call) => decideCall(call, { keepCall: 0.1, keepResult: 0.1 }, options));
+    const kept = applyDecisions(messages, decisions, calls, 300);
+
+    // The tool-use and result messages disappear; the note lands on the
+    // narration they belonged to, not on the messages that carried the calls.
+    expect(kept.map((m) => m.text)).toEqual([
+      'Fix the failing test.',
+      'Read the config, then run the suite.\n[fast-jev-compaction removed 2 tool calls here (Read, Bash); the outcome is no longer in the history — re-run the tool if the result matters]',
+      'The suite fails; fixing now.',
+      'go ahead',
+    ]);
+    // Only the annotated narration is a copy; the rest keep their identity.
+    expect(kept[0]).toBe(messages[0]);
+    expect(kept[1]).not.toBe(messages[1]);
+    expect(kept[2]).toBe(messages[6]);
+    expect(kept[3]).toBe(messages[7]);
+  });
+
+  it('leaves no note when a dropped call has no narration to credit', () => {
+    const messages: Message[] = [
+      message('user', 'Run the suite.'),
+      call('c1', 'Bash', { command: 'npm test' }, 'ok'),
+      result('c1', 'FAIL'),
+      message('assistant', 'It fails.'),
+    ];
+    const calls = collectToolCalls(messages, 0);
+    const decisions = [decideCall(calls[0]!, { keepCall: 0.1, keepResult: 0.1 }, options)];
+    const kept = applyDecisions(messages, decisions, calls, 300);
+
+    // The user prompt is the turn boundary: nothing to annotate, and the
+    // call-only turn disappears with its result.
+    expect(kept.map((m) => m.text)).toEqual(['Run the suite.', 'It fails.']);
+    expect(kept[0]).toBe(messages[0]);
+    expect(kept[1]).toBe(messages[3]);
   });
 });
 

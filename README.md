@@ -48,10 +48,14 @@ built-in compaction summary with the original messages.
    - `keepResult ≥ threshold` → keep call and result;
    - else `keepCall ≥ threshold` → keep the call, truncate the result to its
      first `truncateHeadChars` characters plus a one-line note;
-   - else → remove the call together with its result.
+   - else → remove the call together with its result, and leave a one-line
+     note on the turn's narration: the nearest earlier assistant message with
+     text (Claude Code hands one message per content block, so the narration
+     and the calls usually arrive as separate messages).
 7. The message list is rebuilt: a message that loses all its content is
-   removed, untouched messages are returned as the same objects, and no result
-   is ever left without its call.
+   removed, untouched messages are returned as the same objects (except a
+   narration message that receives a dropped-call note), and no result is
+   ever left without its call.
 
 Jev failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.

@@ -6,7 +6,10 @@ needed. `hooks/fast-jev.ts` is a thin adapter: it reads the plugin options,
 finds the TypeSafe key, hands `session.compact` transcripts to the
 `fast-jev-compaction` library in `src/` (the plugin folder is the repository
 root, so the hook imports it directly) and maps the result back onto session
-messages. User and assistant text is never touched. Jev is sent the whole
+messages. User and assistant text is never touched, except for the one-line
+note a dropped call leaves on the turn's narration (the nearest earlier
+assistant message with text, since Claude Code hands one message per content
+block). Jev is sent the whole
 conversation as `state` (tool outputs replaced by a one-line note) and, for
 every tool call outside the pinned first and newest messages, two questions:
 whether the call should stay and whether its full output should stay. An

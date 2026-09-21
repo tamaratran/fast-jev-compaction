@@ -141,9 +141,9 @@ function truncatedResultText(text: string, isError: boolean, headChars: number):
 }
 
 /**
- * The note left where a call was dropped but the message's own narration
- * stays: without it the assistant reads back turns that report work with no
- * tool call attached and continues the pattern (see issue #65).
+ * The note left where a call was dropped but the turn's narration stays:
+ * without it the assistant reads back turns that report work with no tool
+ * call attached and continues the pattern (see issue #65).
  */
 function droppedCallNote(dropped: readonly ToolUse[]): string {
   const names = dropped.map((tool) => tool.tool).join(', ');
@@ -152,10 +152,39 @@ function droppedCallNote(dropped: readonly ToolUse[]): string {
 }
 
 /**
+ * The message a dropped call's note belongs on. Claude Code hands
+ * `session.compact` one message per content block, so a turn narrated as
+ * `text + tool_use + tool_use` arrives as a text-only assistant message
+ * followed by tool-use-only ones, and the text message is never touched by
+ * the rebuild. Credit the call to the nearest earlier assistant message with
+ * text, walking back over assistant messages without text and over user
+ * messages that only carry tool results; a user message with text is the turn
+ * boundary. Returns `undefined` when the turn has no narration to credit.
+ */
+function narrationTargetFor(index: number, messages: readonly Message[]): number | undefined {
+  for (let i = index; i >= 0; i--) {
+    const message = messages[i]!;
+    if (message.text.trim().length > 0) {
+      return message.role === 'assistant' ? i : undefined;
+    }
+    const carriesOnlyResults =
+      message.role === 'user' &&
+      message.toolUses.length === 0 &&
+      (message.toolResults ?? []).length > 0;
+    if (!carriesOnlyResults && message.role === 'user') {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Rebuilds the conversation from the decisions. A dropped call disappears
  * together with its result; a dropped result keeps a bounded head and note.
- * Messages that lose all their content are removed; untouched messages are
- * returned as the same objects they came in as.
+ * A dropped call leaves a note on the turn's narration message, which is
+ * returned as a copy when it was otherwise untouched. Messages that lose all
+ * their content are removed; other untouched messages are returned as the
+ * same objects they came in as.
  */
 export function applyDecisions(
   messages: readonly Message[],
@@ -169,13 +198,31 @@ export function applyDecisions(
     const call = byId.get(decision.id);
     if (call && decision.action !== 'keep') actions.set(call.tool_use_id, decision.action);
   }
+  // Calls dropped in this pass, credited to the narration message of their turn.
+  const droppedByTarget = new Map<number, ToolUse[]>();
+  for (const [index, message] of messages.entries()) {
+    const dropped = message.toolUses.filter(
+      (tool) => actions.get(tool.tool_use_id) === 'drop_call',
+    );
+    if (dropped.length === 0) continue;
+    const target = narrationTargetFor(index, messages);
+    if (target === undefined) continue;
+    const credited = droppedByTarget.get(target);
+    if (credited) credited.push(...dropped);
+    else droppedByTarget.set(target, [...dropped]);
+  }
+  const noteFor = (index: number): string | undefined => {
+    const dropped = droppedByTarget.get(index);
+    return dropped ? droppedCallNote(dropped) : undefined;
+  };
   const kept: Message[] = [];
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
+    const note = noteFor(index);
     const touched =
       message.toolUses.some((tool) => actions.has(tool.tool_use_id)) ||
       (message.toolResults ?? []).some((result) => actions.has(result.tool_use_id));
     if (!touched) {
-      kept.push(message);
+      kept.push(note ? { ...message, text: message.text + note } : message);
       continue;
     }
     const toolUses = message.toolUses
@@ -222,20 +269,14 @@ export function applyDecisions(
         (result, index) => result === message.toolResults?.[index],
       )
     ) {
-      kept.push(message);
+      kept.push(note ? { ...message, text: message.text + note } : message);
       continue;
     }
     if (message.text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
       continue;
     }
-    const rebuilt: Message = { role: message.role, text: message.text, toolUses };
+    const rebuilt: Message = { role: message.role, text: message.text + (note ?? ''), toolUses };
     if (toolResults.length > 0) rebuilt.toolResults = toolResults;
-    const dropped = message.toolUses.filter(
-      (tool) => actions.get(tool.tool_use_id) === 'drop_call',
-    );
-    if (dropped.length > 0 && message.text.trim().length > 0) {
-      rebuilt.text += droppedCallNote(dropped);
-    }
     kept.push(rebuilt);
   }
   return kept;
