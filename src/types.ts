@@ -45,6 +45,10 @@ export interface ToolCall {
   isError: boolean;
   /** In the first or the newest preserved messages; never a candidate. */
   pinned: boolean;
+  /** Length the result had before an earlier round cut it to a head plus note. */
+  originalChars?: number;
+  /** Characters of that head. */
+  headChars?: number;
 }
 
 export interface CallAnswer {
@@ -60,7 +64,7 @@ export interface CallDecision extends CallAnswer {
   id: string;
   tool: string;
   action: CallAction;
-  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';
+  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped' | 'unscored';
 }
 
 export interface HistoryToolCall {
@@ -90,6 +94,8 @@ export interface FittedState {
   tokens: number;
   /** Which fitting stage produced the state, for diagnostics. */
   stage: string;
+  /** Ids of the calls the state still shows structured (tool, input, result note). */
+  visible: Set<string>;
 }
 
 export interface CompactOptions {
@@ -105,6 +111,12 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Keep every call the fitted state no longer shows structured instead of
+   * applying Jev's answer about it. Default false: the answer is applied and
+   * the call is counted in `stats.unscored`.
+   */
+  keepUnscored?: boolean;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +126,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  keepUnscored: boolean;
 }
 
 export interface CompactResult {
@@ -130,6 +143,10 @@ export interface CompactResult {
     resultsDropped: number;
     callsDropped: number;
     pinned: number;
+    /** Characters (inputs and results) of the candidates: what dropping every call would free. */
+    candidateChars: number;
+    /** Candidates the fitted state no longer showed structured when they were scored. */
+    unscored: number;
     stateTokens: number;
     /** Which fitting stage the state needed, '' when no request was made. */
     stateStage: string;
