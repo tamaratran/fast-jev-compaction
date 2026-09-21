@@ -56,6 +56,7 @@ The plugin declares these `userConfig` values in
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
+| `baseUrl` | `https://api.typesafe.ai/v1/systemone` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended

@@ -10,6 +10,11 @@
       "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
       "sensitive": true
     },
+    "baseUrl": {
+      "type": "string",
+      "title": "System One endpoint",
+      "description": "Jev endpoint. Leave unset to use https://api.typesafe.ai/v1/systemone."
+    },
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
