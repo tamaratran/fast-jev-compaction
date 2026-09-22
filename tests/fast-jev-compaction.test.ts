@@ -8,6 +8,7 @@ import {
   compactMessages,
   decideCall,
   estimateTokens,
+  messageChars,
   fitState,
   JevClient,
   parseJevResponse,
@@ -332,6 +333,16 @@ describe('decisions', () => {
   });
 });
 
+describe('message chars', () => {
+  it('counts the outcome the transcript stores on a tool use', () => {
+    const output = 'z'.repeat(500);
+
+    const chars = messageChars(call('tool-1', 'Bash', { command: 'ls' }, output));
+
+    expect(chars).toBe(JSON.stringify({ command: 'ls' }).length + output.length);
+  });
+});
+
 describe('compact', () => {
   it('resends the full state with every batch and merges the answers', async () => {
     const seen: Seen[] = [];
@@ -371,6 +382,24 @@ describe('compact', () => {
     expect(seen).toHaveLength(0);
     expect(output.stats).toMatchObject({ requests: 0, stateStage: '', calls: 0 });
     expect(output.messages).toEqual(messages);
+  });
+
+  it('counts both stored copies of a dropped tool outcome in the reduction', async () => {
+    const messages = transcript();
+    const textChars = [0, 3, 8, 9].reduce((sum, i) => sum + messages[i]!.text.length, 0);
+    const inputChars = [1, 4, 6].reduce(
+      (sum, i) => sum + JSON.stringify(messages[i]!.toolUses[0]!.input).length,
+      0,
+    );
+    const useTextChars = [1, 4, 6].reduce((sum, i) => sum + messages[i]!.toolUses[0]!.text!.length, 0);
+    const resultChars = [2, 5, 7].reduce((sum, i) => sum + messages[i]!.toolResults![0]!.text.length, 0);
+
+    const output = await compact(messages, fakeJev(() => 0.1), { preserveRecentMessages: 0 });
+
+    expect(output.decisions.every((d) => d.action === 'drop_call')).toBe(true);
+    expect(output.stats.charsBefore).toBe(textChars + inputChars + useTextChars + resultChars);
+    expect(output.stats.charsAfter).toBe(textChars);
+    expect(reductionRatio(output)).toBeGreaterThan(0.25);
   });
 
   it('reports a tiny reduction when Jev wants everything kept', async () => {

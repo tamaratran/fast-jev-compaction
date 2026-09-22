@@ -10,6 +10,11 @@
       "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
       "sensitive": true
     },
+    "baseUrl": {
+      "type": "string",
+      "title": "Jev endpoint URL",
+      "description": "Decisions endpoint. Leave unset for TypeSafe System One."
+    },
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",

@@ -127,6 +127,20 @@ describe('compactSession', () => {
     expect(decisionLogLines(output)).toEqual([`decisions: ${decisionLog(output)}`]);
   });
 
+  it('sends requests to the configured baseUrl', async () => {
+    const urls: string[] = [];
+    const answer = jevFetch(() => 0.9);
+    const config = {
+      ...resolveHookConfig({ preserveRecentMessages: 1, baseUrl: 'https://example.test/decisions' }),
+      apiKey: 'k',
+    };
+    await compactSession(transcript(), config, async (url, init) => {
+      urls.push(url);
+      return answer(url, init);
+    });
+    expect(urls).toEqual(['https://example.test/decisions']);
+  });
+
   it('splits a long decision log into ui.log lines under the host limit', async () => {
     const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
     const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1));

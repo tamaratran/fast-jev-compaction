@@ -233,6 +233,7 @@ export function messageChars(message: Message): number {
     } catch {
       total += 20;
     }
+    total += tool.text?.length ?? 0;
   }
   for (const result of message.toolResults ?? []) total += result.text.length;
   return total;
