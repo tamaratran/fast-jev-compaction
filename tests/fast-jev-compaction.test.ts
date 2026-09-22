@@ -101,6 +101,22 @@ describe('token estimate', () => {
     const json = JSON.stringify({ file_path: '/Users/x/src/a.ts', old_string: 'a = 1;', n: 42 });
     expect(estimateTokens(json)).toBeGreaterThanOrEqual(Math.ceil(json.length / 3));
   });
+
+  it('charges dense runs (hex, UUIDs, base64) at least ~3 chars per token (#81)', () => {
+    const blob = 'c3RhcnQgdGhlIGNvbXBhY3Rpb24gZnJvbSB0aGUgaG9vayBhbmQga2VlcCBpdCBydW5uaW5n';
+    expect(estimateTokens(blob)).toBeGreaterThanOrEqual(Math.ceil(blob.length / 3));
+    const uuid = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    expect(estimateTokens(uuid)).toBeGreaterThanOrEqual(Math.ceil(uuid.replace(/-/g, '').length / 3));
+    const sha = 'd41d8cd98f00b204e9800998ecf8427e';
+    expect(estimateTokens(sha)).toBeGreaterThanOrEqual(Math.ceil(sha.length / 3));
+    // prose and ordinary identifiers keep the word rate
+    expect(estimateTokens('internationalization')).toBe(4);
+    expect(estimateTokens('estimateTokens')).toBe(3);
+    expect(estimateTokens('12345678')).toBe(4);
+    expect(estimateTokens('utf8 base64')).toBeLessThan(6);
+    // repeated filler compresses well and stays on the word rate
+    expect(estimateTokens('x'.repeat(200))).toBe(34);
+  });
 });
 
 describe('tool call collection', () => {
