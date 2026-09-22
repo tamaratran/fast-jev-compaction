@@ -243,6 +243,23 @@ async function getApiKey(
   return undefined;
 }
 
+async function getBaseUrl(
+  $: {
+    env: { get: (name: string) => Promise<string | undefined> };
+    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
+  },
+): Promise<string | undefined> {
+  const fromEnv = await $.env.get('TYPESAFE_BASE_URL');
+  if (fromEnv) return fromEnv;
+  const settings = await $.settings.read();
+  const env = settings['env'];
+  if (env && typeof env === 'object') {
+    const value = (env as Record<string, unknown>)['TYPESAFE_BASE_URL'];
+    if (typeof value === 'string' && value) return value;
+  }
+  return undefined;
+}
+
 function notify(
   $: {
     ui: {
@@ -263,8 +280,9 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const baseUrl = await getBaseUrl($);
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
+        const response = await $.http.fetch(baseUrl ?? url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
