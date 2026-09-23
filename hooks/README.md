@@ -56,10 +56,15 @@ The plugin declares these `userConfig` values in
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
+| `baseUrl` | TypeSafe's System One endpoint |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
+
+`baseUrl` sends every Jev request to another System One endpoint, such as a
+self-hosted gateway in front of Jev; when it is unset, `TYPESAFE_BASE_URL` (the
+host, as the TypeSafe SDK reads it) is used, else TypeSafe itself.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
