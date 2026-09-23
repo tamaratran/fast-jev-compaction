@@ -9,6 +9,7 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
+import { redactDeep } from '../src/redact.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
 import type {
   CompactOptions,
@@ -87,11 +88,19 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   return config;
 }
 
-/** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+/** A `JevAsker` over the engine's `$.http.fetch`. Secrets are redacted from what is sent (`onRedact` gets the count). */
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  onRedact: (count: number) => void = () => {},
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const safeState = redactDeep(state, [apiKey]);
+      const safeQuestions = redactDeep(questions, [apiKey]);
+      onRedact(safeState.count + safeQuestions.count);
+      const request = buildJevRequest({ apiKey, model }, safeState.value, safeQuestions.value);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -166,10 +175,27 @@ export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
+  onRedact?: (count: number) => void,
 ): Promise<SessionCompaction> {
   if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, config.apiKey, config.model, onRedact),
+    config,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
+}
+
+/**
+ * Drops the engine's `handle` so each kept message is persisted as a fresh record
+ * after the compact boundary. With handles, kept tool_result records keep a
+ * parentUuid behind the boundary and kept assistant records keep their
+ * message.id, so `--resume` walks back into the full pre-compaction history
+ * (fast-jev-compaction#89, anthropics/claude-code#95328). Costs the engine's own
+ * bookkeeping for those records (hidden reasoning, images), not their text or tool pairs.
+ */
+export function withoutHandles(messages: readonly SessionMessage[]): SessionMessage[] {
+  return messages.map(({ handle: _handle, ...rest }) => rest);
 }
 
 function percent(ratio: number): string {
@@ -263,10 +289,19 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
-        return { status: response.status, ok: response.ok, text: response.text };
-      });
+      let redacted = 0;
+      const { result, messages } = await compactSession(
+        event.messages,
+        config,
+        async (url, init) => {
+          const response = await $.http.fetch(url, init);
+          return { status: response.status, ok: response.ok, text: response.text };
+        },
+        (count) => {
+          redacted += count;
+        },
+      );
+      $.ui.log(`redacted ${redacted} secret-shaped value(s) from the Jev request`);
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
@@ -279,7 +314,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
         $,
         `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
       );
-      return { messages };
+      return { messages: withoutHandles(messages) };
     } catch (error) {
       notify(
         $,
