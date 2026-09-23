@@ -23,6 +23,7 @@ const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  baseUrl: undefined as string | undefined,
 };
 
 export type HookFetchInit = {
@@ -45,6 +46,10 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  /** System One endpoint; unset = TypeSafe direct. OpenRouter: https://openrouter.ai/api/alpha/decisions with model typesafe/jev-1.13. */
+  baseUrl?: string;
+  /** A file holding the key: the bare key, or dotenv lines naming the key variable. `~/` is the home directory. */
+  apiKeyFile?: string;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -80,18 +85,22 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  const baseUrl = optionString(options, 'baseUrl');
+  if (baseUrl) config.baseUrl = baseUrl;
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
+  const apiKeyFile = optionString(options, 'apiKeyFile');
+  if (apiKeyFile) config.apiKeyFile = apiKeyFile;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
   return config;
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string, baseUrl?: string): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -167,8 +176,10 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  if (!config.apiKey) {
+    throw new Error(`${isOpenRouter(config.baseUrl) ? 'OPENROUTER_API_KEY' : 'TYPESAFE_API_KEY'} is not configured`);
+  }
+  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model, config.baseUrl), config);
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -224,23 +235,68 @@ export function decisionLogLines(
   );
 }
 
-async function getApiKey(
-  $: {
-    env: { get: (name: string) => Promise<string | undefined> };
-    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
-  },
-  config: HookConfig,
-): Promise<string | undefined> {
-  if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
-  if (fromEnv) return fromEnv;
-  const settings = await $.settings.read();
-  const env = settings['env'];
-  if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
-    if (typeof value === 'string' && value) return value;
+type KeyEngine = {
+  env: { get: (name: string) => Promise<string | undefined> };
+  settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
+  fs: { read: (path: string) => Promise<string> };
+};
+
+function isOpenRouter(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  try {
+    const host = new URL(baseUrl).hostname;
+    return host === 'openrouter.ai' || host.endsWith('.openrouter.ai');
+  } catch {
+    return false;
   }
-  return undefined;
+}
+
+function settingsEnv(settings: Readonly<Record<string, unknown>>, name: string): string | undefined {
+  const env = settings['env'];
+  if (!env || typeof env !== 'object') return undefined;
+  const value = (env as Record<string, unknown>)[name];
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function keyFromFile(text: string, names: readonly string[]): string | undefined {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  for (const name of names) {
+    for (const line of lines) {
+      const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+      if (match && match[1] === name) return match[2]!.replace(/^["']|["']$/g, '') || undefined;
+    }
+  }
+  const [only] = lines;
+  return lines.length === 1 && only && !only.includes('=') ? only : undefined;
+}
+
+/**
+ * The key for the configured endpoint. On an OpenRouter endpoint the OpenRouter
+ * key comes first; the TypeSafe key stays the fallback, so a key that works
+ * today keeps working.
+ */
+export async function getApiKey($: KeyEngine, config: HookConfig): Promise<string | undefined> {
+  if (config.apiKey) return config.apiKey;
+  const openRouter = isOpenRouter(config.baseUrl);
+  const settings = await $.settings.read();
+  if (openRouter) {
+    const key = (await $.env.get('OPENROUTER_API_KEY')) || settingsEnv(settings, 'OPENROUTER_API_KEY');
+    if (key) return key;
+  }
+  const key = (await $.env.get('TYPESAFE_API_KEY')) || settingsEnv(settings, 'TYPESAFE_API_KEY');
+  if (key) return key;
+  if (!config.apiKeyFile) return undefined;
+  try {
+    const home = (await $.env.get('HOME')) ?? '';
+    const path = config.apiKeyFile.startsWith('~/') ? `${home}${config.apiKeyFile.slice(1)}` : config.apiKeyFile;
+    const names = openRouter ? ['OPENROUTER_API_KEY', 'TYPESAFE_API_KEY'] : ['TYPESAFE_API_KEY'];
+    return keyFromFile(await $.fs.read(path), names);
+  } catch {
+    return undefined;
+  }
 }
 
 function notify(

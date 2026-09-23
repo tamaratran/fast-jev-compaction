@@ -6,8 +6,8 @@
   "userConfig": {
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "title": "API key",
+      "description": "TypeSafe API key, or an OpenRouter key when the endpoint is OpenRouter. Leave unset to use TYPESAFE_API_KEY (OPENROUTER_API_KEY first on an OpenRouter endpoint).",
       "sensitive": true
     },
     "keepThreshold": {
@@ -57,6 +57,16 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "System One endpoint",
+      "description": "Leave unset for TypeSafe direct (api.typesafe.ai). For OpenRouter use https://openrouter.ai/api/alpha/decisions with model typesafe/jev-1.13; the key then comes from OPENROUTER_API_KEY."
+    },
+    "apiKeyFile": {
+      "type": "string",
+      "title": "API key file",
+      "description": "File read when no key is set or in the environment: the bare key, or dotenv lines with OPENROUTER_API_KEY / TYPESAFE_API_KEY. ~/ is the home directory."
     }
   }
 }

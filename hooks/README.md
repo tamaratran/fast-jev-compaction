@@ -61,6 +61,12 @@ The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
+With `baseUrl` on `openrouter.ai` (and `model` `typesafe/jev-1.13`) the key is
+an OpenRouter key: `OPENROUTER_API_KEY` is read first, from the environment and
+then from the `env` block of the settings, with `TYPESAFE_API_KEY` as the
+fallback. `apiKeyFile` names a file to read when neither is set: the bare key,
+or dotenv lines holding one of those variables (`~/` is the home directory).
+
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
 do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,

@@ -3,6 +3,7 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  getApiKey,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -54,6 +55,10 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({ baseUrl: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13' })).toMatchObject({
+      baseUrl: 'https://openrouter.ai/api/alpha/decisions',
+      model: 'typesafe/jev-1.13',
+    });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -145,5 +150,47 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('getApiKey', () => {
+  const OPENROUTER = 'https://openrouter.ai/api/alpha/decisions';
+  const engine = (env: Record<string, string>, settingsEnv: Record<string, string> = {}, files: Record<string, string> = {}) => ({
+    env: { get: async (name: string) => env[name] },
+    settings: { read: async () => ({ env: settingsEnv }) },
+    fs: {
+      read: async (path: string) => {
+        const text = files[path];
+        if (text === undefined) throw new Error('ENOENT');
+        return text;
+      },
+    },
+  });
+  const base = resolveHookConfig({});
+
+  it('prefers the OpenRouter key when the endpoint is OpenRouter', async () => {
+    const config = { ...base, baseUrl: OPENROUTER };
+    expect(await getApiKey(engine({ OPENROUTER_API_KEY: 'or', TYPESAFE_API_KEY: 'ts' }), config)).toBe('or');
+    expect(await getApiKey(engine({}, { OPENROUTER_API_KEY: 'or-settings' }), config)).toBe('or-settings');
+    expect(await getApiKey(engine({ TYPESAFE_API_KEY: 'ts' }), config)).toBe('ts');
+    expect(await getApiKey(engine({ OPENROUTER_API_KEY: 'or' }), { ...config, apiKey: 'explicit' })).toBe('explicit');
+  });
+
+  it('ignores the OpenRouter key on the TypeSafe endpoint', async () => {
+    expect(await getApiKey(engine({ OPENROUTER_API_KEY: 'or', TYPESAFE_API_KEY: 'ts' }), base)).toBe('ts');
+    expect(await getApiKey(engine({ OPENROUTER_API_KEY: 'or' }), base)).toBeUndefined();
+  });
+
+  it('reads apiKeyFile as a raw key or a dotenv file', async () => {
+    const config = { ...base, baseUrl: OPENROUTER, apiKeyFile: '~/.keys/or' };
+    const home = { HOME: '/home/u' };
+    expect(await getApiKey(engine(home, {}, { '/home/u/.keys/or': ' sk-raw\n' }), config)).toBe('sk-raw');
+    expect(
+      await getApiKey(engine(home, {}, { '/home/u/.keys/or': '# c\nOTHER=x\nexport OPENROUTER_API_KEY="sk-env"\n' }), config),
+    ).toBe('sk-env');
+    expect(await getApiKey(engine(home, {}, { '/home/u/.keys/or': 'TYPESAFE_API_KEY=ts-file\n' }), { ...base, apiKeyFile: '~/.keys/or' })).toBe('ts-file');
+    expect(await getApiKey(engine(home, {}, { '/home/u/.keys/or': 'OTHER=x\n' }), config)).toBeUndefined();
+    expect(await getApiKey(engine(home), config)).toBeUndefined();
+    expect(await getApiKey(engine({ ...home, OPENROUTER_API_KEY: 'or' }, {}, { '/home/u/.keys/or': 'sk-raw' }), config)).toBe('or');
   });
 });
