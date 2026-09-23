@@ -162,6 +162,37 @@ To run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 
 from the repository root. No publishing step is required; the marketplace is
 just the repo's `.claude-plugin/marketplace.json`.
 
+### Using SemIf Local Decision Engine (Apple Silicon MPS)
+
+You can run compaction locally on Apple Silicon Mac using [SemIf](https://github.com/TheoLeeCJ/SemIf) without sending transcripts to an external API:
+
+1. **Launch SemIf resident server**:
+   ```bash
+   cd ../SemIf
+   python3 scripts/semif_server.py --port 8765 --device mps --dtype float16
+   ```
+
+2. **Configure Claude Code plugin options**:
+   Configure `.claude-plugin/plugin.json` or `config.json`:
+   ```json
+   {
+     "provider": "semif",
+     "baseUrl": "http://127.0.0.1:8765/v1/systemone"
+   }
+   ```
+   No `TYPESAFE_API_KEY` is required when `provider: "semif"` is configured.
+
+3. **Programmatic Usage**:
+   ```typescript
+   import { SemIfClient, compact } from 'fast-jev-compaction';
+
+   const client = new SemIfClient({
+     baseUrl: 'http://127.0.0.1:8765/v1/systemone',
+   });
+   const result = await compact(messages, client);
+   ```
+
+
 ## Development
 
 ```sh

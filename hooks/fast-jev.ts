@@ -42,6 +42,8 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  baseUrl?: string;
+  provider?: 'jev' | 'semif';
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
@@ -70,6 +72,22 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
+  const globalEnv =
+    typeof globalThis !== 'undefined' && 'process' in globalThis
+      ? (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+      : undefined;
+
+  const providerVal = optionString(options, 'provider');
+  const provider =
+    providerVal === 'jev' || providerVal === 'semif'
+      ? providerVal
+      : undefined;
+  const defaultBaseUrl =
+    provider === 'semif'
+      ? (globalEnv?.['SEMIF_BASE_URL'] ?? 'http://127.0.0.1:8765/v1/systemone')
+      : undefined;
+  const baseUrl = optionString(options, 'baseUrl') ?? defaultBaseUrl;
+
   const config: HookConfig = {
     ...numbers,
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
@@ -80,6 +98,9 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  if (provider) config.provider = provider;
+  if (baseUrl) config.baseUrl = baseUrl;
+
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
@@ -88,10 +109,11 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string, baseUrl?: string): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const authKey = apiKey || (baseUrl ? 'semif-local' : '');
+      const request = buildJevRequest({ apiKey: authKey, model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -167,8 +189,13 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const apiKey =
+    config.apiKey ||
+    (config.provider === 'semif' || config.baseUrl
+      ? 'semif-local'
+      : '');
+  if (!apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
+  const result = await compact(messages, jevAsker(fetchFn, apiKey, config.model, config.baseUrl), config);
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 

@@ -1,9 +1,20 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
+    "provider": {
+      "type": "string",
+      "title": "Decision provider",
+      "description": "Engine to use: 'jev' (cloud default) or 'semif' (Apple Silicon MPS local engine).",
+      "default": "jev"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Decision server endpoint",
+      "description": "Custom endpoint URL (e.g. http://127.0.0.1:8765/v1/systemone for SemIf)."
+    },
     "apiKey": {
       "type": "string",
       "title": "TypeSafe API key",
