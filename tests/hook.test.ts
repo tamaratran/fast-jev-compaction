@@ -147,3 +147,41 @@ describe('compactSession', () => {
     ).rejects.toThrow(/500/);
   });
 });
+
+describe('base URL', () => {
+  function urlCapturingFetch(urls: string[]) {
+    return async (url: string, init?: { body?: string }) => {
+      urls.push(url);
+      const { questions } = JSON.parse(init?.body ?? '{}') as { questions: Record<string, unknown> };
+      const answers = Object.fromEntries(
+        Object.keys(questions).map((key) => [key, { type: 'noul', noul: 0.9 }]),
+      );
+      return { status: 200, ok: true, text: JSON.stringify({ answers }) };
+    };
+  }
+
+  it('reads baseUrl from userConfig and leaves it unset when absent', () => {
+    expect(resolveHookConfig({ baseUrl: 'https://api.codiv.ai/v1/systemone' }).baseUrl).toBe(
+      'https://api.codiv.ai/v1/systemone',
+    );
+    expect(resolveHookConfig({}).baseUrl).toBeUndefined();
+    expect(resolveHookConfig({ baseUrl: '' }).baseUrl).toBeUndefined();
+  });
+
+  it('sends requests to the configured baseUrl', async () => {
+    const urls: string[] = [];
+    const config = {
+      ...resolveHookConfig({ preserveRecentMessages: 1, baseUrl: 'https://api.codiv.ai/v1/systemone' }),
+      apiKey: 'k',
+    };
+    await compactSession(transcript(), config, urlCapturingFetch(urls));
+    expect(urls).toEqual(['https://api.codiv.ai/v1/systemone']);
+  });
+
+  it('falls back to the TypeSafe endpoint when no baseUrl is configured', async () => {
+    const urls: string[] = [];
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    await compactSession(transcript(), config, urlCapturingFetch(urls));
+    expect(urls).toEqual(['https://api.typesafe.ai/v1/systemone']);
+  });
+});
