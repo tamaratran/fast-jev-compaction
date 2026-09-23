@@ -2,3 +2,8 @@ node_modules
 dist
 .env
 demo/JevDemo/build
+__pycache__
+*.pyc
+.DS_Store
+tasks/
+

@@ -57,6 +57,18 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "provider": {
+      "type": "string",
+      "title": "Decision Provider",
+      "description": "Decision provider: 'laya' (local open-source) or 'jev' (cloud API).",
+      "default": "laya"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Base Endpoint URL",
+      "description": "Endpoint URL. Defaults to http://localhost:8000/v1/systemone for Laya.",
+      "default": "http://localhost:8000/v1/systemone"
     }
   }
 }

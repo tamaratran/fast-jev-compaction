@@ -42,6 +42,8 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  baseUrl?: string;
+  provider?: 'jev' | 'laya';
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
@@ -70,6 +72,15 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
+  const providerVal = optionString(options, 'provider');
+  const provider = (providerVal === 'laya' || providerVal === 'jev') ? providerVal : undefined;
+  const globalEnv = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  const baseUrl =
+    optionString(options, 'baseUrl') ??
+    globalEnv?.['LAYA_BASE_URL'] ??
+    globalEnv?.['TYPESAFE_BASE_URL'] ??
+    (provider === 'laya' ? 'http://localhost:8000/v1/systemone' : undefined);
+
   const config: HookConfig = {
     ...numbers,
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
@@ -80,6 +91,9 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  if (provider) config.provider = provider;
+  if (baseUrl) config.baseUrl = baseUrl;
+
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
@@ -88,10 +102,10 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string, baseUrl?: string): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey: apiKey || 'laya-local', model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -167,8 +181,9 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const apiKey = config.apiKey || (config.provider === 'laya' || config.baseUrl ? 'laya-local' : '');
+  if (!apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
+  const result = await compact(messages, jevAsker(fetchFn, apiKey, config.model, config.baseUrl), config);
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -243,6 +258,27 @@ async function getApiKey(
   return undefined;
 }
 
+async function getBaseUrl(
+  $: {
+    env: { get: (name: string) => Promise<string | undefined> };
+    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
+  },
+  config: HookConfig,
+): Promise<string | undefined> {
+  if (config.baseUrl) return config.baseUrl;
+  const fromEnv = (await $.env.get('LAYA_BASE_URL')) || (await $.env.get('TYPESAFE_BASE_URL'));
+  if (fromEnv) return fromEnv;
+  const settings = await $.settings.read();
+  const env = settings['env'];
+  if (env && typeof env === 'object') {
+    const laya = (env as Record<string, unknown>)['LAYA_BASE_URL'];
+    if (typeof laya === 'string' && laya) return laya;
+    const typesafe = (env as Record<string, unknown>)['TYPESAFE_BASE_URL'];
+    if (typeof typesafe === 'string' && typesafe) return typesafe;
+  }
+  return config.provider === 'laya' ? 'http://localhost:8000/v1/systemone' : undefined;
+}
+
 function notify(
   $: {
     ui: {
@@ -262,7 +298,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const config = {
+        ...configured,
+        apiKey: await getApiKey($, configured),
+        baseUrl: await getBaseUrl($, configured),
+      };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };

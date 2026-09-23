@@ -1,5 +1,7 @@
 # fast-jev-compaction
 
+[日本語版ドキュメント (README.ja.md)](README.ja.md)
+
 Claude Code plugin that replaces the compaction summary with Jev decisions:
 every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
@@ -96,13 +98,59 @@ The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
 `apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
 put it in a source file.
 
+## Local Laya Addon (Zero Cloud API Cost)
+
+This fork includes a built-in addon to use **[Laya](https://github.com/NandhaKishorM/laya)** (an open-source non-autoregressive decision engine) locally instead of calling TypeSafe's Jev cloud API.
+
+### 1. Start Local Laya Server (Python)
+
+```sh
+# Install Laya & dependencies
+pip install laya
+
+# Launch local Laya HTTP API server (compatible with Jev endpoint)
+python3 laya_addon/laya_server.py --port 8000
+```
+
+### 2. Usage in Node.js / TypeScript
+
+```ts
+import { compact, LayaClient, LayaSubprocessAsker } from 'fast-jev-compaction';
+
+// Option A: Connect to HTTP server (sub-35ms response time)
+const layaClient = new LayaClient({ baseUrl: 'http://localhost:8000/v1/systemone' });
+const result = await compact(messages, layaClient);
+
+// Option B: Standalone Python subprocess bridge
+const layaBridge = new LayaSubprocessAsker();
+const result2 = await compact(messages, layaBridge);
+```
+
+### 3. Usage with Claude Code Plugin
+
+Configure the plugin in `.claude-plugin/plugin.json` or your user settings:
+
+```json
+{
+  "provider": "laya",
+  "baseUrl": "http://localhost:8000/v1/systemone"
+}
+```
+
+Or set the environment variable (both `LAYA_BASE_URL` and standard `TYPESAFE_BASE_URL` are supported):
+```sh
+export LAYA_BASE_URL=http://localhost:8000/v1/systemone
+# or use the standard SDK environment variable:
+export TYPESAFE_BASE_URL=http://localhost:8000/v1/systemone
+```
+
 ## Options
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
 | `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
+| `baseUrl` | `TYPESAFE_BASE_URL` / `LAYA_BASE_URL` / System One endpoint | Endpoint URL (`https://api.typesafe.ai/v1/systemone` or local Laya daemon) |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
