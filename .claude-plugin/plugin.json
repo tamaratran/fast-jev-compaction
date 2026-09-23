@@ -10,6 +10,12 @@
       "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
       "sensitive": true
     },
+    "baseUrl": {
+      "type": "string",
+      "title": "System One endpoint",
+      "description": "Jev endpoint, e.g. a self-hosted gateway's https://host/v1/systemone. Leave unset to use TYPESAFE_BASE_URL (host, as the TypeSafe SDK reads it) or TypeSafe itself.",
+      "default": ""
+    },
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",

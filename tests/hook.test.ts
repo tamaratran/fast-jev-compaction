@@ -3,6 +3,7 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  endpointFromBaseUrl,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -65,6 +66,27 @@ describe('hook config', () => {
       compactAtPercent: 60,
       minReductionRatio: 0.25,
     });
+  });
+});
+
+describe('endpoint', () => {
+  it('takes a baseUrl option, or TYPESAFE_BASE_URL as the TypeSafe SDK reads it', () => {
+    expect(resolveHookConfig({ baseUrl: 'http://localhost:20228/v1/systemone' }).baseUrl).toBe('http://localhost:20228/v1/systemone');
+    expect(endpointFromBaseUrl(undefined)).toBeUndefined();
+    expect(endpointFromBaseUrl('localhost:20228')).toBeUndefined();
+    expect(endpointFromBaseUrl('http://localhost:20228/')).toBe('http://localhost:20228/v1/systemone');
+    expect(endpointFromBaseUrl(' https://gw.example.com/jev ')).toBe('https://gw.example.com/jev/v1/systemone');
+  });
+
+  it('sends every request to the configured endpoint', async () => {
+    const urls: string[] = [];
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1, baseUrl: 'http://localhost:20228/v1/systemone' }), apiKey: 'k' };
+    const answer = jevFetch(() => 0.9, []);
+    await compactSession(transcript(), config, async (url, init) => {
+      urls.push(url);
+      return answer(url, init);
+    });
+    expect(urls).toEqual(['http://localhost:20228/v1/systemone']);
   });
 });
 
