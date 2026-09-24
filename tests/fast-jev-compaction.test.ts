@@ -403,6 +403,12 @@ describe('HTTP client', () => {
     });
   });
 
+  it('explains a 403 HTML firewall response without echoing the page', () => {
+    expect(() => parseJevResponse(403, false, '<!DOCTYPE html><html>blocked</html>')).toThrow(
+      'Jev request failed (403): the endpoint returned an HTML error page; a web firewall or proxy may be blocking this request',
+    );
+  });
+
   it('rejects failed and malformed responses', () => {
     expect(() => parseJevResponse(500, false, 'boom')).toThrow(/500/);
     expect(() => parseJevResponse(200, true, 'not json')).toThrow(/malformed/);
