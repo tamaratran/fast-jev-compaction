@@ -18,6 +18,19 @@ The repository is both an npm package (`src/`) and a Claude Code plugin
 (`hooks/`, `.claude-plugin/`) that uses the package to replace Claude Code's
 built-in compaction summary with the original messages.
 
+## Data sent to the endpoint
+
+The plugin posts each decision request to
+`https://api.typesafe.ai/v1/systemone` with the configured API key as bearer
+authorization. When using the library directly, a supplied `baseUrl` changes
+the destination. Each request contains a fitted conversation state and a batch
+of questions. The state includes user and assistant text, tool names, and tool
+inputs. Inputs can be shortened to fit; tool-result bodies are replaced by
+status and character-count notes, and older text may be abridged or omitted as
+described below. If questions require multiple requests, each request resends
+the same fitted state. This is an external service: only enable the plugin for
+session data you are authorized to send to that endpoint.
+
 ## How it works
 
 1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in
@@ -132,6 +145,14 @@ is a thin adapter that feeds `session.compact` transcripts through `src/` and
 falls back to Claude Code's built-in summary on errors or insufficient
 reduction. See [`hooks/README.md`](hooks/README.md) for configuration and the
 Claude Code 2.1.274 type reference.
+
+Replacement depends on the early-access function event `session.compact`, whose
+hook can return replacement `messages`. This is distinct from command hooks
+such as `PreCompact` and `PostCompact`; those hooks alone do not return the
+replacement messages this plugin needs. The host must support and load the
+function-hook interface. If it is unavailable, this plugin cannot replace the
+summary; if a loaded hook errors or removes too little, it delegates to the
+normal summary.
 
 ### Install in Claude Code
 
