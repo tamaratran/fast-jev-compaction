@@ -42,6 +42,14 @@ export function parseJevResponse(
   text: string,
 ): JevResponse {
   if (!ok) {
+    if (
+      status === 403 &&
+      /<\s*(?:!doctype\s+html|html)\b/i.test(text.slice(0, 1024))
+    ) {
+      throw new Error(
+        'Jev request failed (403): the endpoint returned an HTML error page; a web firewall or proxy may be blocking this request',
+      );
+    }
     throw new Error(`Jev request failed (${status}): ${text.slice(0, 200)}`);
   }
   let parsed: unknown;
