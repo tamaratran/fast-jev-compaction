@@ -58,5 +58,9 @@
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
     }
+  },
+  "author": {
+    "name": "tamaratran",
+    "url": "https://github.com/tamaratran"
   }
 }

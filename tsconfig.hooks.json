@@ -9,9 +9,8 @@
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "baseUrl": ".",
     "paths": {
-      "claude-code": ["types/claude-code.d.ts"]
+      "claude-code": ["./types/claude-code.d.ts"]
     }
   },
   "include": ["hooks", "types"]

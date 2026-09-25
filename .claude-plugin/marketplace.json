@@ -12,5 +12,6 @@
       "version": "0.3.0",
       "license": "MIT"
     }
-  ]
+  ],
+  "description": "Replace Claude Code compaction summaries with verbatim Jev-scored history pruning."
 }
