@@ -19,11 +19,26 @@ import type {
   ToolUse,
 } from '../src/types.js';
 
+/**
+ * Which compactions Jev could not do may go on to Claude Code's built-in
+ * summary: `auto` (default) only the engine's own, `always` every one,
+ * `never` none.
+ */
+export type BuiltinFallback = 'auto' | 'always' | 'never';
+
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  builtinFallback: 'auto' as BuiltinFallback,
 };
+
+/**
+ * Percentage points the context must grow by after a skipped `turn.complete`
+ * request before the next one, so a conversation with nothing left to prune
+ * is not re-scored after every turn.
+ */
+const RETRY_AFTER_SKIP_PERCENT = 10;
 
 export type HookFetchInit = {
   method?: string;
@@ -45,6 +60,7 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  builtinFallback: BuiltinFallback;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -55,6 +71,26 @@ function optionNumber(options: PluginOptions, key: string, fallback: number): nu
 function optionString(options: PluginOptions, key: string): string | undefined {
   const value = options[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function optionFallback(options: PluginOptions): BuiltinFallback {
+  const value = options['builtinFallback'];
+  return value === 'auto' || value === 'always' || value === 'never'
+    ? value
+    : HOOK_DEFAULTS.builtinFallback;
+}
+
+/**
+ * Whether a compaction Jev could not do may be handed to the built-in summary.
+ * Only the engine's `auto` compaction (its threshold, or a prompt too long)
+ * must shrink the conversation; `/compact` (`manual`), a plugin's request and
+ * a `precompute` can leave it as it is, which is free, where the summary is a
+ * long model call that rewrites the verbatim history.
+ */
+export function mayUseBuiltin(trigger: string | undefined, mode: BuiltinFallback): boolean {
+  if (mode === 'always') return true;
+  if (mode === 'never') return false;
+  return trigger === 'auto';
 }
 
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
@@ -79,6 +115,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    builtinFallback: optionFallback(options),
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -259,8 +296,18 @@ function notify(
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  let retryAtPercent = 0;
 
   on('session.compact', async ($, event, next) => {
+    const giveUp = (why: string) => {
+      if (mayUseBuiltin(event.trigger, configured.builtinFallback)) {
+        notify($, `fallback to built-in summary (${why})`);
+        return next(event);
+      }
+      notify($, `not compacted, no built-in summary (${why})`);
+      const reason = why.length > 200 ? `${why.slice(0, 200)}…` : why;
+      return { skip: `fast-jev-compaction: ${reason}; conversation left as it is` };
+    };
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
@@ -269,11 +316,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
-        notify(
-          $,
-          `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
-        );
-        return next(event);
+        return giveUp(`below ${percent(config.minReductionRatio)} minimum: ${summarize(result)}`);
       }
       notify(
         $,
@@ -281,11 +324,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       );
       return { messages };
     } catch (error) {
-      notify(
-        $,
-        `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,
-      );
-      return next(event);
+      return giveUp(error instanceof Error ? error.message : String(error));
     }
   });
 
@@ -293,9 +332,12 @@ export const register: Register = (on: On, options: PluginOptions) => {
     if (compacting) return next(event);
     try {
       const { context } = await $.session.usage();
-      if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
+      const used = context.percent ?? 0;
+      if (used < configured.compactAtPercent) retryAtPercent = 0;
+      if (used < Math.max(configured.compactAtPercent, retryAtPercent)) return next(event);
       compacting = true;
-      await $.session.compact();
+      const { skip } = await $.session.compact();
+      retryAtPercent = skip === undefined ? 0 : used + RETRY_AFTER_SKIP_PERCENT;
     } catch (error) {
       $.ui.log(
         `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,

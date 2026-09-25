@@ -3,6 +3,8 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  mayUseBuiltin,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -53,9 +55,22 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+      builtinFallback: 'auto',
+    });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({
+        apiKey: 'k',
+        keepThreshold: 0.3,
+        maxStateTokens: 1000,
+        model: 'jev-x',
+        goal: 'g',
+        compactAtPercent: 'no',
+        builtinFallback: 'sometimes',
+      }),
     ).toEqual({
       apiKey: 'k',
       keepThreshold: 0.3,
@@ -64,7 +79,10 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      builtinFallback: 'auto',
     });
+    expect(resolveHookConfig({ builtinFallback: 'never' }).builtinFallback).toBe('never');
+    expect(resolveHookConfig({ builtinFallback: 'always' }).builtinFallback).toBe('always');
   });
 });
 
@@ -145,5 +163,147 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+type Hook = ($: unknown, event: unknown, next: (event: unknown) => Promise<unknown>) => Promise<unknown>;
+
+/** The hooks `register` installs, keyed by event, with the given plugin options. */
+function hooks(options: Record<string, unknown> = {}): Record<string, Hook> {
+  const registered: Record<string, Hook> = {};
+  const on = (event: string, hook: Hook) => {
+    registered[event] = hook;
+  };
+  (register as unknown as (on: unknown, options: unknown) => void)(on, options);
+  return registered;
+}
+
+function host(fetch: ReturnType<typeof jevFetch>) {
+  const notices: string[] = [];
+  const $ = {
+    env: { get: async (name: string) => (name === 'TYPESAFE_API_KEY' ? 'k' : undefined) },
+    settings: { read: async () => ({}) },
+    http: { fetch },
+    ui: { log: (text: string) => notices.push(text), toast: () => {} },
+  };
+  return { $, notices };
+}
+
+const CORE = { messages: ['built-in summary'] };
+
+async function compactWith(
+  trigger: string,
+  fetch: ReturnType<typeof jevFetch>,
+  options: Record<string, unknown> = {},
+) {
+  const { $, notices } = host(fetch);
+  let delegated = false;
+  const out = await hooks({ preserveRecentMessages: 1, ...options })['session.compact']!(
+    $,
+    { trigger, messages: transcript() },
+    async () => {
+      delegated = true;
+      return CORE;
+    },
+  );
+  return { out, delegated, notices };
+}
+
+const failing = async () => ({ status: 500, ok: false, text: 'upstream error' });
+
+describe('built-in summary fallback', () => {
+  it('is only for the engine auto compaction by default', () => {
+    expect(mayUseBuiltin('auto', 'auto')).toBe(true);
+    for (const trigger of ['manual', 'plugin', 'precompute', undefined]) {
+      expect(mayUseBuiltin(trigger, 'auto')).toBe(false);
+      expect(mayUseBuiltin(trigger, 'always')).toBe(true);
+      expect(mayUseBuiltin(trigger, 'never')).toBe(false);
+    }
+    expect(mayUseBuiltin('auto', 'never')).toBe(false);
+  });
+
+  it('installs a Jev result that clears the minimum on any trigger', async () => {
+    for (const trigger of ['manual', 'auto']) {
+      const { out, delegated, notices } = await compactWith(trigger, jevFetch(() => 0.1));
+      expect(delegated).toBe(false);
+      expect((out as { messages: unknown[] }).messages.length).toBeLessThan(transcript().length);
+      expect(notices.at(-1)).toMatch(/^kept \d+\/7 messages, no summary/);
+    }
+  });
+
+  it('leaves a /compact that Jev cannot shrink as it is', async () => {
+    const { out, delegated, notices } = await compactWith('manual', jevFetch(() => 0.9));
+    expect(delegated).toBe(false);
+    expect(out).toEqual({
+      skip: expect.stringMatching(/^fast-jev-compaction: below 25% minimum: 0% reduction; .*; conversation left as it is$/),
+    });
+    expect(notices.at(-1)).toMatch(/^not compacted, no built-in summary \(below 25% minimum/);
+  });
+
+  it('hands an engine auto compaction that Jev cannot shrink to the built-in summary', async () => {
+    const { out, delegated, notices } = await compactWith('auto', jevFetch(() => 0.9));
+    expect(delegated).toBe(true);
+    expect(out).toBe(CORE);
+    expect(notices.at(-1)).toMatch(/^fallback to built-in summary \(below 25% minimum/);
+  });
+
+  it('skips on a Jev failure unless the engine itself is compacting', async () => {
+    for (const trigger of ['manual', 'plugin', 'precompute']) {
+      const { out, delegated } = await compactWith(trigger, failing);
+      expect(delegated).toBe(false);
+      expect(out).toEqual({ skip: expect.stringMatching(/500.*; conversation left as it is$/) });
+    }
+    const { out, delegated } = await compactWith('auto', failing);
+    expect(delegated).toBe(true);
+    expect(out).toBe(CORE);
+  });
+
+  it('keeps the skip notice to one short line', async () => {
+    const long = async () => ({ status: 403, ok: false, text: `<!DOCTYPE html>${'x'.repeat(2000)}` });
+    const { out } = await compactWith('manual', long);
+    expect((out as { skip: string }).skip.length).toBeLessThan(300);
+  });
+
+  it('follows builtinFallback always and never', async () => {
+    expect((await compactWith('manual', jevFetch(() => 0.9), { builtinFallback: 'always' })).out).toBe(CORE);
+    expect((await compactWith('auto', jevFetch(() => 0.9), { builtinFallback: 'never' })).out).toEqual({
+      skip: expect.stringMatching(/conversation left as it is$/),
+    });
+  });
+});
+
+describe('turn.complete request', () => {
+  function driver() {
+    const turnComplete = hooks()['turn.complete']!;
+    const state = { percent: 0, answer: { skip: 'nothing to prune' } as { skip?: string }, requested: [] as number[] };
+    const $ = {
+      session: {
+        usage: async () => ({ context: { percent: state.percent } }),
+        compact: async () => {
+          state.requested.push(state.percent);
+          return state.answer;
+        },
+      },
+      ui: { log: () => {} },
+    };
+    const turn = async (percent: number) => {
+      state.percent = percent;
+      await turnComplete($, {}, async () => ({}));
+    };
+    return { state, turn };
+  }
+
+  it('asks again after a skipped request only once the context has grown', async () => {
+    const { state, turn } = driver();
+    for (const percent of [50, 61, 65, 70, 71]) await turn(percent);
+    state.answer = {};
+    for (const percent of [81, 62]) await turn(percent);
+    expect(state.requested).toEqual([61, 71, 81, 62]);
+  });
+
+  it('forgets the wait once the context drops below compactAtPercent', async () => {
+    const { state, turn } = driver();
+    for (const percent of [61, 65, 30, 61]) await turn(percent);
+    expect(state.requested).toEqual([61, 61]);
   });
 });

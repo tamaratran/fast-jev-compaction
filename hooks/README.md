@@ -52,6 +52,7 @@ The plugin declares these `userConfig` values in
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `minReductionRatio` | `0.25` |
+| `builtinFallback` | `auto` |
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
@@ -61,18 +62,27 @@ The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
-the response is malformed, the key is unavailable, the history cannot be
-fitted into the state budget, or the estimated reduction is below
-`minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
-built-in compaction. The outcome is shown as a toast and logged with the
+Every option except `apiKey`, `compactAtPercent`, `minReductionRatio`,
+`builtinFallback` and `model` is passed straight to the library; see the root
+README for what they do. The `session.compact` hook runs the Jev requests
+concurrently. If Jev fails, the response is malformed, the key is unavailable,
+the history cannot be fitted into the state budget, or the estimated reduction
+is below `minReductionRatio`, what happens next depends on the compaction's
+`trigger`. With `builtinFallback` at `auto`, only Claude Code's own compaction
+(`auto`: its threshold, or a prompt too long, when the conversation has to
+shrink) logs a fallback and delegates to Claude Code's built-in compaction;
+`/compact` (`manual`), a plugin's request (`plugin`, including this plugin's
+`turn.complete` one) and `precompute` answer `{ skip }` instead, so the
+conversation stays as it is and Claude Code shows why. `always` delegates on
+every trigger, as the plugin did before the option existed; `never` on none.
+The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call
 `decisions:` line with both probabilities is logged for diagnosis. The
 `turn.complete` hook requests
 compaction when `context.percent` reaches `compactAtPercent`, with an
-in-flight guard.
+in-flight guard. When that request is skipped, the hook waits until the
+context has grown by another 10 percentage points, or dropped below
+`compactAtPercent` again, before it asks again.
 
 ## Scope and caveat
 
