@@ -34,6 +34,12 @@
       "description": "Minimum estimated character reduction required to replace history.",
       "default": 0.25
     },
+    "builtinFallback": {
+      "type": "string",
+      "title": "Built-in summary fallback",
+      "description": "Which compactions fall back to Claude Code's built-in summary when Jev fails or frees less than the minimum: auto (only Claude Code's own automatic compaction; others leave the conversation as it is), always, or never.",
+      "default": "auto"
+    },
     "maxStateTokens": {
       "type": "number",
       "title": "Maximum Jev state tokens",
