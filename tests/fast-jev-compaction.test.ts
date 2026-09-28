@@ -430,4 +430,21 @@ describe('HTTP client', () => {
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
   });
+
+  it('asks a local Jev-compatible endpoint without a key or Authorization header', async () => {
+    const seen: { url?: string; headers?: Record<string, string> } = {};
+    const local = new JevClient({
+      apiKey: '',
+      baseUrl: 'http://127.0.0.1:8577/v1/systemone',
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        seen.url = String(url);
+        seen.headers = init?.headers as Record<string, string>;
+        return new Response(JSON.stringify({ answers: { q: { noul: 0.7 } } }), { status: 200 });
+      }) as typeof fetch,
+    });
+    const response = await local.ask('s', { q: { type: 'noul', instructions: 'x' } });
+    expect(response.answers.q).toEqual({ noul: 0.7 });
+    expect(seen.url).toBe('http://127.0.0.1:8577/v1/systemone');
+    expect(seen.headers).not.toHaveProperty('authorization');
+  });
 });

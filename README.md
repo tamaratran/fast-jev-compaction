@@ -98,12 +98,15 @@ put it in a source file.
 
 ### Custom endpoint (JuL, local inference)
 
-To use a different endpoint (e.g., [JuL](https://github.com/usejul/jul) running locally), provide `baseUrl`. The key becomes optional when using your own server:
+To keep the conversation on your machine, point `baseUrl` at a local server
+that speaks the Jev protocol, e.g. [JuL](https://github.com/usejul/jul)'s
+`jul serve` (`POST /v1/systemone`, port 8577 by default). The key becomes
+optional when `baseUrl` is set:
 
 ```ts
 const result = await compactMessages(transcript, {
-  baseUrl: 'http://localhost:8000',
-  // apiKey is not needed for local inference
+  baseUrl: 'http://127.0.0.1:8577/v1/systemone',
+  // no apiKey: nothing leaves the machine
 });
 ```
 
