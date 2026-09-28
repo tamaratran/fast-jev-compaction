@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -27,6 +28,37 @@ function result(id: string, text: string, isError = false): SessionMessage {
 }
 
 const fileA = 'export const a = 1;\n'.repeat(50);
+
+type HookHandler = (host: any, event: any, next: (event: any) => unknown) => Promise<unknown>;
+
+function registeredHooks(options: Record<string, unknown> = {}): Map<string, HookHandler> {
+  const handlers = new Map<string, HookHandler>();
+  const on = ((name: string, ...args: unknown[]) => {
+    handlers.set(name, args.at(-1) as HookHandler);
+    return {};
+  }) as never;
+  register(on, options as never);
+  return handlers;
+}
+
+function turnComplete(overrides: Record<string, unknown> = {}) {
+  return {
+    answer: 'done',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 'turn-1',
+    reason: 'answer',
+    ...overrides,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 function transcript(): SessionMessage[] {
   return [
@@ -145,5 +177,112 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('registered compaction hooks', () => {
+  it('does not send speculative precompute transcripts to Jev', async () => {
+    const hooks = registeredHooks();
+    const handler = hooks.get('session.compact')!;
+    const next = vi.fn(async (event) => event);
+    const host = {
+      env: { get: vi.fn() },
+      settings: { read: vi.fn() },
+      http: { fetch: vi.fn() },
+      ui: { log: vi.fn(), toast: vi.fn() },
+    };
+    const event = { trigger: 'precompute', messages: [] };
+
+    const result = await handler(host, event, next);
+
+    expect(result).toMatchObject({ skip: expect.any(String) });
+    expect(next).not.toHaveBeenCalled();
+    expect(host.http.fetch).not.toHaveBeenCalled();
+  });
+
+  it('passes subagent and fork compactions through without calling Jev', async () => {
+    const hooks = registeredHooks();
+    const handler = hooks.get('session.compact')!;
+    const next = vi.fn(async (event) => ({ messages: event.messages }));
+    const host = {
+      env: { get: vi.fn() },
+      settings: { read: vi.fn() },
+      http: { fetch: vi.fn() },
+      ui: { log: vi.fn(), toast: vi.fn() },
+    };
+    const events = [
+      { trigger: 'manual', agentId: 'agent-1', messages: [] },
+      { trigger: 'precompute', agentId: 'fork-1', messages: [] },
+    ];
+
+    for (const event of events) await handler(host, event, next);
+
+    expect(next).toHaveBeenNthCalledWith(1, events[0]);
+    expect(next).toHaveBeenNthCalledWith(2, events[1]);
+    expect(host.http.fetch).not.toHaveBeenCalled();
+  });
+
+  it('only auto-compacts completed main-agent answers', async () => {
+    const hooks = registeredHooks({ compactAtPercent: 1 });
+    const handler = hooks.get('turn.complete')!;
+    const usage = vi.fn(async () => ({ context: { percent: 100 } }));
+    const compact = vi.fn(async () => ({}));
+    const next = vi.fn(async (event) => event);
+    const host = { session: { usage, compact }, ui: { log: vi.fn() } };
+
+    for (const event of [
+      turnComplete({ reason: 'aborted', isAborted: true }),
+      turnComplete({ reason: 'refusal' }),
+      turnComplete({ reason: 'error' }),
+      turnComplete({ agentId: 'agent-1' }),
+    ]) {
+      await handler(host, event, next);
+    }
+
+    expect(usage).not.toHaveBeenCalled();
+    expect(compact).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(4);
+  });
+
+  it('auto-compacts a main-session answer when usage reaches the configured threshold', async () => {
+    const hooks = registeredHooks({ compactAtPercent: 60 });
+    const handler = hooks.get('turn.complete')!;
+    const event = turnComplete();
+    const usage = vi.fn(async () => ({ context: { percent: 75 } }));
+    const compact = vi.fn(async () => ({}));
+    const next = vi.fn(async (received) => received);
+    const host = { session: { usage, compact }, ui: { log: vi.fn() } };
+
+    const result = await handler(host, event, next);
+
+    expect(usage).toHaveBeenCalledOnce();
+    expect(compact).toHaveBeenCalledOnce();
+    expect(next).toHaveBeenCalledWith(event);
+    expect(result).toBe(event);
+  });
+
+  it('claims the auto-compaction guard before awaiting usage and releases it after completion', async () => {
+    const hooks = registeredHooks({ compactAtPercent: 60 });
+    const handler = hooks.get('turn.complete')!;
+    const firstUsage = deferred<{ context: { percent: number } }>();
+    const secondUsage = deferred<{ context: { percent: number } }>();
+    const usage = vi.fn().mockReturnValueOnce(firstUsage.promise).mockReturnValueOnce(secondUsage.promise);
+    const compact = vi.fn(async () => ({}));
+    const next = vi.fn(async (event) => event);
+    const host = { session: { usage, compact }, ui: { log: vi.fn() } };
+
+    const first = handler(host, turnComplete(), next);
+    const concurrent = handler(host, turnComplete({ turnId: 'turn-2' }), next);
+    firstUsage.resolve({ context: { percent: 30 } });
+    secondUsage.resolve({ context: { percent: 30 } });
+    await Promise.all([first, concurrent]);
+
+    expect(usage).toHaveBeenCalledTimes(1);
+    expect(compact).not.toHaveBeenCalled();
+
+    const afterRelease = handler(host, turnComplete({ turnId: 'turn-3' }), next);
+    expect(usage).toHaveBeenCalledTimes(2);
+    secondUsage.resolve({ context: { percent: 30 } });
+    await afterRelease;
   });
 });
