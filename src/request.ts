@@ -13,20 +13,23 @@ export interface JevRequest {
 /** The HTTP request for one Jev call, for any fetch-like transport. */
 export function buildJevRequest(
   params: {
-    apiKey: string;
+    apiKey?: string;
     model?: string;
     baseUrl?: string;
   },
   state: JevState,
   questions: JevQuestions,
 ): JevRequest {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+  };
+  if (params.apiKey) {
+    headers.authorization = `Bearer ${params.apiKey}`;
+  }
   return {
     url: params.baseUrl ?? SYSTEM_ONE_URL,
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${params.apiKey}`,
-      'content-type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       model: params.model ?? DEFAULT_MODEL,
       state,
