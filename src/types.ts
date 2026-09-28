@@ -103,8 +103,13 @@ export interface CompactOptions {
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
   maxRequestTokens?: number;
-  /** Characters of a dropped tool result to retain. Default 300. */
+  /** Characters of a dropped tool result's head to retain. Default 150. */
   truncateHeadChars?: number;
+  /**
+   * Ceiling on the identifiers and error lines salvaged from the rest of a
+   * dropped result. Default 600; zero keeps the head only.
+   */
+  salvageMaxChars?: number;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +119,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  salvageMaxChars: number;
 }
 
 export interface CompactResult {

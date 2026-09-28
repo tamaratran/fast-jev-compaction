@@ -3,4 +3,5 @@ export * from './request.js';
 export * from './client.js';
 export * from './state.js';
 export * from './compact.js';
+export * from './salvage.js';
 export * from './messages.js';

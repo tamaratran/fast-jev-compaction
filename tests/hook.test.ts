@@ -54,6 +54,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({ salvageMaxChars: 200 })).toMatchObject({ salvageMaxChars: 200 });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -78,16 +79,16 @@ describe('session message mapping', () => {
     ];
     messages[1]!.toolUses[0]!.text = 'x'.repeat(2000);
     messages[2]!.toolResults![0]!.text = 'x'.repeat(2000);
-    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300));
+    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, { headChars: 300, maxChars: 600 }));
     expect(out).toHaveLength(messages.length);
     expect(out[0]).toBe(messages[0]);
     expect(out[1]?.handle).toBeUndefined();
     expect(out[1]?.toolUses[0]?.text).toMatch(
-      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
+      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction dropped 1700 chars`),
     );
     expect(out[2]?.handle).toBeUndefined();
     expect(out[2]?.toolResults?.[0]?.text).toMatch(
-      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
+      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction dropped 1700 chars`),
     );
     expect(out[2]?.toolResults?.[0]).toMatchObject({ tool_use_id: 'tool-1', isError: false });
     expect(out[3]).toBe(messages[3]);
@@ -103,7 +104,7 @@ describe('session message mapping', () => {
       decideCall(calls[0]!, { keepCall: 0.9, keepResult: 0.1 }, { keepThreshold: 0.5 }),
       decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.9 }, { keepThreshold: 0.5 }),
     ];
-    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300));
+    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, { headChars: 300, maxChars: 600 }));
     expect(out[1]).toBe(messages[1]);
     expect(out[2]).toBe(messages[2]);
   });

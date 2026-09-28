@@ -78,7 +78,8 @@ describe('options', () => {
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
-      truncateHeadChars: 300,
+      truncateHeadChars: 150,
+      salvageMaxChars: 600,
     });
     expect(resolveOptions({
       keepThreshold: Number.NaN,
@@ -279,7 +280,7 @@ describe('decisions', () => {
       decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.1 }, options),
       decideCall(calls[2]!, { keepCall: 0.9, keepResult: 0.9 }, options),
     ];
-    const kept = applyDecisions(messages, decisions, calls, 300);
+    const kept = applyDecisions(messages, decisions, calls, { headChars: 300, maxChars: 600 });
 
     expect(kept.map((m) => m.text || m.toolUses[0]?.tool_use_id || m.toolResults?.[0]?.tool_use_id)).toEqual([
       'Never edit anything under src/generated. Fix the failing test.',
@@ -294,10 +295,10 @@ describe('decisions', () => {
     expect(kept[0]).toBe(messages[0]);
     expect(kept[2]).not.toBe(messages[4]);
     expect(kept[2]?.toolUses[0]?.text).toMatch(
-      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
+      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction dropped 1700 chars`),
     );
     expect(kept[3]?.toolResults?.[0]?.text).toMatch(
-      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
+      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction dropped 1700 chars`),
     );
     expect(kept[2]).not.toBe(messages[4]);
     expect(kept[3]).not.toBe(messages[5]);
@@ -307,9 +308,23 @@ describe('decisions', () => {
     const shortMessages = transcript();
     shortMessages[4]!.toolUses[0]!.text = 'y'.repeat(100);
     shortMessages[5]!.toolResults![0]!.text = 'y'.repeat(100);
-    const shortKept = applyDecisions(shortMessages, decisions, calls, 300);
+    const shortKept = applyDecisions(shortMessages, decisions, calls, { headChars: 300, maxChars: 600 });
     expect(shortKept[2]).toBe(shortMessages[4]);
     expect(shortKept[3]).toBe(shortMessages[5]);
+  });
+
+  it('salvages identifiers a dropped result would otherwise have taken with it', () => {
+    const messages = transcript();
+    messages[2]!.toolResults![0]!.text = `${'filler line\n'.repeat(200)}src/buried/Thing.tsx\n`;
+    const calls = collectToolCalls(messages, 0);
+    const decisions = [decideCall(calls[0]!, { keepCall: 0.9, keepResult: 0.1 }, options)];
+
+    const kept = applyDecisions(messages, decisions, calls, {
+      headChars: 150,
+      maxChars: 600,
+    });
+
+    expect(kept[2]?.toolResults?.[0]?.text).toContain('src/buried/Thing.tsx');
   });
 
   it('honours truncateHeadChars, including a zero head', () => {
@@ -319,15 +334,15 @@ describe('decisions', () => {
     const original = messages[2]!.toolResults![0]!.text;
     const total = original.length;
 
-    const kept = applyDecisions(messages, decisions, calls, 50);
+    const kept = applyDecisions(messages, decisions, calls, { headChars: 50, maxChars: 0 });
     expect(kept[2]?.toolResults?.[0]?.text).toBe(
-      `${original.slice(0, 50)}\n[fast-jev-compaction truncated ${total - 50} chars of this tool result; re-run the tool if needed]`,
+      `${original.slice(0, 50)}\n[fast-jev-compaction dropped ${total - 50} chars of this tool result; re-run the tool if needed]`,
     );
     expect(kept[1]?.toolUses[0]?.text).toBe(kept[2]?.toolResults?.[0]?.text);
 
-    const noHead = applyDecisions(messages, decisions, calls, 0);
+    const noHead = applyDecisions(messages, decisions, calls, { headChars: 0, maxChars: 0 });
     expect(noHead[2]?.toolResults?.[0]?.text).toBe(
-      `[fast-jev-compaction truncated ${total} chars of this tool result; re-run the tool if needed]`,
+      `[fast-jev-compaction dropped ${total} chars of this tool result; re-run the tool if needed]`,
     );
   });
 });

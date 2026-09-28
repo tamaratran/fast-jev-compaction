@@ -48,9 +48,15 @@
     },
     "truncateHeadChars": {
       "type": "number",
-      "title": "Truncated tool result head",
-      "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
-      "default": 300
+      "title": "Dropped tool result head",
+      "description": "Characters from the start of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note and the salvaged block.",
+      "default": 150
+    },
+    "salvageMaxChars": {
+      "type": "number",
+      "title": "Salvaged identifiers budget",
+      "description": "Ceiling on the file paths, URLs, identifiers and error lines recovered from the rest of a dropped tool result; 0 keeps the head only.",
+      "default": 600
     },
     "model": {
       "type": "string",

@@ -11,8 +11,9 @@ conversation as `state` (tool outputs replaced by a one-line note) and, for
 every tool call outside the pinned first and newest messages, two questions:
 whether the call should stay and whether its full output should stay. An
 item is kept when Jev's probability reaches `keepThreshold`; a dropped result
-is truncated to its first `truncateHeadChars` characters plus a one-line note,
-and a dropped call disappears with its result.
+is replaced by its first `truncateHeadChars` characters, a one-line note, and
+the paths, URLs, identifiers and error lines salvaged from the rest of it
+(within `salvageMaxChars`), and a dropped call disappears with its result.
 
 The state is fitted into `maxStateTokens` in stages: tool inputs are
 truncated, then long texts are abridged (oldest first, pinned messages last),
@@ -54,7 +55,8 @@ The plugin declares these `userConfig` values in
 | `minReductionRatio` | `0.25` |
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
-| `truncateHeadChars` | `300` |
+| `truncateHeadChars` | `150` |
+| `salvageMaxChars` | `600` |
 | `model` | `jev-latest` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
