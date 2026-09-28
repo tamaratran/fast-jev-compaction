@@ -96,20 +96,33 @@ The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
 `apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
 put it in a source file.
 
+### Custom endpoint (JuL, local inference)
+
+To use a different endpoint (e.g., [JuL](https://github.com/usejul/jul) running locally), provide `baseUrl`. The key becomes optional when using your own server:
+
+```ts
+const result = await compactMessages(transcript, {
+  baseUrl: 'http://localhost:8000',
+  // apiKey is not needed for local inference
+});
+```
+
+`JevClient` will not send an `Authorization` header when `apiKey` is omitted.
+
 ## Options
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
+| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`). Optional when using a custom `baseUrl`. |
 | `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
-| `fetch` | native `fetch` | Injectable fetch implementation for tests |
-| `goal` | last 3 user prompts | Ongoing task description included in the state |
-| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
-| `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
-| `maxStateTokens` | `25000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
-| `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint. Set to your own server (e.g., JuL) for local inference. |
+| `fetch` | native `fetch` | Injectable fetch implementation for tests. |
+| `goal` | last 3 user prompts | Ongoing task description included in the state. |
+| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay. |
+| `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept). |
+| `maxStateTokens` | `25000` | Estimated token ceiling for the state. |
+| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions. |
+| `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note. |
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting
