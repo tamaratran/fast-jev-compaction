@@ -56,14 +56,25 @@ The plugin declares these `userConfig` values in
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
+| `baseUrl` | the TypeSafe endpoint |
+| `envFile` | unset |
 
-The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
-through `TYPESAFE_API_KEY`. The environment variable is the recommended
-development setup.
+The key can be supplied as the sensitive `apiKey` plugin option, or through
+`TYPESAFE_API_KEY` or `OPENROUTER_API_KEY` in the environment, in the
+settings' `env` block, or in the dotenv file `envFile` names. The environment
+variable is the recommended development setup; `envFile` is for a key that
+should not sit in a settings file.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
+`baseUrl` is unset by default, which reaches
+`https://api.typesafe.ai/v1/systemone` as before. Set it to
+`https://openrouter.ai/api/alpha/decisions` with `model` left at `jev-latest`
+to reach the same Jev model through OpenRouter. `envFile` is read only when
+nothing earlier held a key, and a file that cannot be read is not an error:
+the key is simply not there, and the hook falls back as it would.
+
+Every option except `apiKey`, `baseUrl`, `envFile`, `compactAtPercent`,
+`minReductionRatio` and `model` is passed straight to the library; see the root
+README for what they do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
 fitted into the state budget, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's

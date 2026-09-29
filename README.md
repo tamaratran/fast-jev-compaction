@@ -96,6 +96,11 @@ The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
 `apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
 put it in a source file.
 
+`baseUrl` picks the Jev endpoint. Left unset it is the TypeSafe one; the same
+Jev model is also served through OpenRouter, at
+`https://openrouter.ai/api/alpha/decisions`, with `model` left at
+`jev-latest` and an OpenRouter key in place of a TypeSafe one.
+
 ## Options
 
 | Option | Default | Description |

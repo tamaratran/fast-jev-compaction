@@ -9,6 +9,7 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
+import { parseEnv } from '../src/dotenv.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
 import type {
   CompactOptions,
@@ -42,6 +43,10 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  /** Jev endpoint; unset reaches TypeSafe directly, as the library defaults to. */
+  baseUrl?: string;
+  /** A dotenv file to read the key from when the environment has none. */
+  envFile?: string;
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
@@ -82,16 +87,25 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
+  const baseUrl = optionString(options, 'baseUrl');
+  if (baseUrl) config.baseUrl = baseUrl;
+  const envFile = optionString(options, 'envFile');
+  if (envFile) config.envFile = envFile;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
   return config;
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  baseUrl?: string,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -168,7 +182,11 @@ export async function compactSession(
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
   if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, config.apiKey, config.model, config.baseUrl),
+    config,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -224,22 +242,58 @@ export function decisionLogLines(
   );
 }
 
-async function getApiKey(
+/** The names a key may be stored under, in the order they are tried. */
+const KEY_NAMES = ['TYPESAFE_API_KEY', 'OPENROUTER_API_KEY'] as const;
+
+function settingEnv(settings: Readonly<Record<string, unknown>>, name: string): string | undefined {
+  const env = settings['env'];
+  if (!env || typeof env !== 'object') return undefined;
+  const value = (env as Record<string, unknown>)[name];
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+/**
+ * The key the given dotenv file holds, or `undefined` when it cannot be read.
+ * An absolute path is read as given; a relative one is under the session's
+ * working directory, as `$.fs.read` reads it.
+ */
+export async function dotenvKey(
+  $: { fs: { read: (path: string) => Promise<string> } },
+  path: string,
+): Promise<string | undefined> {
+  try {
+    const parsed = parseEnv(await $.fs.read(path));
+    for (const name of KEY_NAMES) {
+      const value = parsed[name];
+      if (value) return value;
+    }
+  } catch {
+    // A missing or unreadable file is not an error: the key is simply not there.
+  }
+  return undefined;
+}
+
+export async function getApiKey(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
     settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
+    fs: { read: (path: string) => Promise<string> };
   },
   config: HookConfig,
 ): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
+  // The names are spelled literally: `claude plugin validate` reads them off
+  // this source, and a name it cannot see is refused.
   const fromEnv = await $.env.get('TYPESAFE_API_KEY');
   if (fromEnv) return fromEnv;
+  const fromOpenRouter = await $.env.get('OPENROUTER_API_KEY');
+  if (fromOpenRouter) return fromOpenRouter;
   const settings = await $.settings.read();
-  const env = settings['env'];
-  if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
-    if (typeof value === 'string' && value) return value;
+  for (const name of KEY_NAMES) {
+    const value = settingEnv(settings, name);
+    if (value) return value;
   }
+  if (config.envFile) return dotenvKey($, config.envFile);
   return undefined;
 }
 

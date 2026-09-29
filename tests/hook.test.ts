@@ -3,10 +3,14 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  dotenvKey,
+  getApiKey,
+  jevAsker,
   resolveHookConfig,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
+import { parseEnv } from '../src/dotenv.js';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
 
 type SessionMessage = Message & { handle?: string };
@@ -65,6 +69,87 @@ describe('hook config', () => {
       compactAtPercent: 60,
       minReductionRatio: 0.25,
     });
+  });
+
+  it('carries the endpoint and the key file through', () => {
+    expect(
+      resolveHookConfig({ baseUrl: 'https://openrouter.ai/api/alpha/decisions', envFile: '/tmp/.env' }),
+    ).toMatchObject({
+      baseUrl: 'https://openrouter.ai/api/alpha/decisions',
+      envFile: '/tmp/.env',
+    });
+    expect(resolveHookConfig({ baseUrl: '', envFile: '' })).not.toHaveProperty('baseUrl');
+  });
+});
+
+/** A `$` stand-in holding only what `getApiKey` reaches for. */
+function keyEngine(options: {
+  env?: Record<string, string>;
+  settings?: Record<string, unknown>;
+  files?: Record<string, string>;
+}) {
+  return {
+    env: { get: async (name: string) => options.env?.[name] },
+    settings: { read: async () => options.settings ?? {} },
+    fs: {
+      read: async (path: string) => {
+        const text = options.files?.[path];
+        if (text === undefined) throw new Error(`ENOENT: ${path}`);
+        return text;
+      },
+    },
+  };
+}
+
+describe('api key resolution', () => {
+  it('prefers the option, then the environment, then the settings', async () => {
+    const config = resolveHookConfig({});
+    expect(await getApiKey(keyEngine({ env: { TYPESAFE_API_KEY: 'env' } }), { ...config, apiKey: 'opt' })).toBe('opt');
+    expect(await getApiKey(keyEngine({ env: { TYPESAFE_API_KEY: 'env' } }), config)).toBe('env');
+    expect(await getApiKey(keyEngine({ env: { OPENROUTER_API_KEY: 'or' } }), config)).toBe('or');
+    expect(
+      await getApiKey(keyEngine({ settings: { env: { TYPESAFE_API_KEY: 'set' } } }), config),
+    ).toBe('set');
+    expect(await getApiKey(keyEngine({}), config)).toBeUndefined();
+  });
+
+  it('falls back to the dotenv file, and past a file it cannot read', async () => {
+    const config = { ...resolveHookConfig({}), envFile: '/tmp/.env' };
+    const engine = keyEngine({ files: { '/tmp/.env': 'OPENROUTER_API_KEY=from-file\n' } });
+    expect(await getApiKey(engine, config)).toBe('from-file');
+    // A missing file is not an error: the key is simply not there.
+    expect(await getApiKey(keyEngine({}), config)).toBeUndefined();
+    expect(await getApiKey(keyEngine({}), { ...config, envFile: undefined })).toBeUndefined();
+  });
+});
+
+describe('dotenv reading', () => {
+  it('reads assignments, skips comments and blanks, honours quotes', () => {
+    const text = [
+      '# a comment',
+      '',
+      'OPENROUTER_API_KEY=sk-or-v1-abc',
+      'QUOTED="sk with spaces"',
+      "SINGLE='sk-single'",
+      'TRAILING=sk-value # not part of it',
+      'EMPTY=',
+      'BROKEN LINE',
+      'OPENROUTER_API_KEY=last-wins',
+    ].join('\n');
+    expect(parseEnv(text)).toEqual({
+      OPENROUTER_API_KEY: 'last-wins',
+      QUOTED: 'sk with spaces',
+      SINGLE: 'sk-single',
+      TRAILING: 'sk-value',
+      EMPTY: '',
+    });
+  });
+
+  it('prefers the TypeSafe name over the OpenRouter one', async () => {
+    const engine = keyEngine({
+      files: { '.env': 'TYPESAFE_API_KEY=ts\nOPENROUTER_API_KEY=or\n' },
+    });
+    expect(await dotenvKey(engine, '.env')).toBe('ts');
   });
 });
 
@@ -137,6 +222,34 @@ describe('compactSession', () => {
     ]);
     expect(lines.every((line) => line.length <= 60)).toBe(true);
     expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);
+  });
+
+  it('sends the request to the configured endpoint', async () => {
+    const urls: string[] = [];
+    const openrouter = 'https://openrouter.ai/api/alpha/decisions';
+    await jevAsker(async (url) => {
+      urls.push(url);
+      return { status: 200, ok: true, text: JSON.stringify({ answers: { call_t1: { noul: 0.9 } } }) };
+    }, 'k', 'jev-x', openrouter).ask('state', { call_t1: { type: 'noul', instructions: 'keep?' } });
+    expect(urls).toEqual([openrouter]);
+
+    // The whole chain, so the config option really reaches the request.
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k', baseUrl: openrouter };
+    await compactSession(transcript(), config, async (url, init) => {
+      urls.push(url);
+      return jevFetch(() => 0.9)(url, init);
+    });
+    expect(urls).toEqual([openrouter, openrouter]);
+  });
+
+  it('reaches the TypeSafe endpoint when no baseUrl is set', async () => {
+    const urls: string[] = [];
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    await compactSession(transcript(), config, async (url, init) => {
+      urls.push(url);
+      return jevFetch(() => 0.1)(url, init);
+    });
+    expect(urls).toEqual(['https://api.typesafe.ai/v1/systemone']);
   });
 
   it('throws on a missing key and on failed requests so the hook falls back', async () => {

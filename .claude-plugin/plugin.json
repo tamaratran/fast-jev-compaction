@@ -7,8 +7,20 @@
     "apiKey": {
       "type": "string",
       "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY, OPENROUTER_API_KEY or envFile.",
       "sensitive": true
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Jev endpoint",
+      "description": "Endpoint the Jev call goes to. Leave unset for the TypeSafe one; set it to https://openrouter.ai/api/alpha/decisions to reach the same model through OpenRouter.",
+      "default": ""
+    },
+    "envFile": {
+      "type": "string",
+      "title": "Key file",
+      "description": "Path to a dotenv-style file to read the key from when neither the environment nor the settings hold one. An absolute path, or one under the session's working directory.",
+      "default": ""
     },
     "keepThreshold": {
       "type": "number",
