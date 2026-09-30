@@ -6,6 +6,7 @@ import {
   batchCalls,
   briefInput,
   reproducible,
+  factLines,
   factStubText,
   buildJevRequest,
   collectToolCalls,
@@ -480,7 +481,7 @@ describe('fact stubs: drop what a re-run gives back', () => {
     const yes = [
       ['Read', { file_path: 'src/a.ts' }],
       ['Grep', { pattern: 'x' }],
-      ['Bash', { command: 'ls -la F:/Temp/ucp 2>&1 | head -40; echo ---; find F:/Temp/ucp -maxdepth 3 -type d' }],
+      ['Bash', { command: 'ls F:/Temp/ucp 2>&1 | head -40; echo ---; find F:/Temp/ucp -maxdepth 3 -type d' }],
       ['Bash', { command: 'cd F:/Temp/ucp && sha256sum *.ts | cut -c1-16' }],
       ['Bash', { command: 'git log --oneline | head -5' }],
       ['PowerShell', { command: "rg -l -i 'x' 'C:/st' 2>&1 | Select-Object -First 20" }],
@@ -490,6 +491,7 @@ describe('fact stubs: drop what a re-run gives back', () => {
       ['Bash', { command: 'timeout 60 mcpc --json 2>&1 | head -c 12000' }],
       ['Bash', { command: 'netstat -ano | grep 3845; tasklist' }],
       ['Bash', { command: 'ls > listing.txt' }],
+      ['Bash', { command: 'ls -la F:/Temp/ucp 2>&1 | head -40' }],
       ['Bash', { command: "sed -i 's/a/b/' f.txt" }],
       ['Bash', { command: 'npm test' }],
       ['Write', { file_path: 'a.ts', content: 'x' }],
@@ -582,5 +584,37 @@ describe('fact stubs: rail tiers, dense dumps, failed reads', () => {
     expect(text('toolu_T')).toContain('F:/Projects/p150 3150'); // dense dump kept whole
     expect(text('toolu_F')).toContain('120s timeout'); // not a re-run line
     expect(RAIL_TIERS[0]!.denseKeep).toBeGreaterThan(0);
+  });
+});
+
+describe('metadata, long lines, dense tables', () => {
+  it('treats file metadata as an observation, alone or inside a compound command', () => {
+    for (const command of [
+      'cd /x && wc -l pin.mjs && sed -n 1,140p pin.mjs',
+      'cat card.xtml; echo; ls -la /x /x/reports 2>&1',
+      'stat a.txt',
+      'du -sh /x',
+    ]) expect(reproducible('Bash', { command }), command).toBe(false);
+    expect(reproducible('PowerShell', { command: 'Get-ChildItem C:/x | Select-Object -First 5' })).toBe(false);
+    expect(reproducible('Bash', { command: 'cat a.txt | head -40' })).toBe(true);
+  });
+
+  it('splits a long line into pieces, so a fact deep inside it is still found', () => {
+    const sep = '\\n'; // an escaped newline inside a JSON string: the line itself has no real line break
+    const filler = Array.from({ length: 60 }, () => `\\"content\\": \\"note ${'y'.repeat(120)}\\"`).join(sep);
+    const line = `{"text": "${filler}${sep}  \\"id\\": \\"f46101ab4a1ecfd2\\"${sep}${filler}"}`;
+    expect(line.includes('\n')).toBe(false);
+    expect(line.length).toBeGreaterThan(10_000);
+    expect(factLines(line, 3_000).some((l) => l.includes('f46101ab4a1ecfd2'))).toBe(true);
+  });
+
+  it('keeps a dense table up to 32k chars whole', () => {
+    const table = Array.from(
+      { length: 150 },
+      (_, i) => `b${i} server-${i}.exe.bak-b${i}-20260930 | wave W${i} | ['drafts:events.json', 'live:agent-${i}.jsonl'] | ${'z'.repeat(60)}`,
+    ).join('\n');
+    expect(table.length).toBeGreaterThan(20_000);
+    expect(table.length).toBeLessThan(32_000);
+    expect(factStubText(table, false, 200, 360)).toBe(table);
   });
 });

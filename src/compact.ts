@@ -162,11 +162,31 @@ const FACT_LINE_CHARS = 200;
 const TAIL_CHARS = 120;
 const ERROR_KEEP_CHARS = 2_000;
 
+// A line longer than FACT_LINE_CHARS (a JSON string with escaped newlines, a minified record, a wide table row) is
+// split into pieces rather than truncated, so a fact deep in a long line is still a candidate (seen in practice: an
+// id at char ~4800 of a 10.7k-char MCP JSON line was lost to the 200-char cut).
+function pieces(line: string): string[] {
+  const out: string[] = [];
+  for (let rest of line.split('\\n')) {
+    rest = rest.trim();
+    while (rest.length > FACT_LINE_CHARS) {
+      const window = rest.slice(0, FACT_LINE_CHARS);
+      const cut = Math.max(window.lastIndexOf(', '), window.lastIndexOf('; '), window.lastIndexOf(' | '), window.lastIndexOf(' '));
+      const end = cut > FACT_LINE_CHARS / 2 ? cut + 1 : FACT_LINE_CHARS;
+      out.push(rest.slice(0, end).trim());
+      rest = rest.slice(end).trim();
+    }
+    if (rest) out.push(rest);
+  }
+  return out;
+}
+
 /** Lines of `text` that carry facts, most fact-dense first until `budget` chars, returned in text order. */
 export function factLines(text: string, budget: number): string[] {
   const scored = text
     .split(/\r?\n/)
-    .map((line, index) => ({ line: line.trim().slice(0, FACT_LINE_CHARS), index }))
+    .flatMap((line) => pieces(line))
+    .map((line, index) => ({ line, index }))
     .filter(({ line }) => line.length > 0)
     .map((entry) => ({ ...entry, score: FACT_PATTERNS.filter((re) => re.test(entry.line)).length }))
     .filter(({ score }) => score > 0)
@@ -206,7 +226,7 @@ export interface Rails {
 // where globalThis.process may not exist. It moves tier 0 only.
 const knob = (name: string, fallback: number) => Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[name] ?? fallback);
 export const RAIL_TIERS: readonly Rails[] = [
-  { small: knob('FJC_SMALL_KEEP', 6_000), share: knob('FJC_FACT_SHARE', 0.3), readKeep: knob('FJC_READ_KEEP', 3_000), denseKeep: knob('FJC_DENSE_KEEP', 20_000), denseShare: knob('FJC_DENSE_SHARE', 0.5) },
+  { small: knob('FJC_SMALL_KEEP', 6_000), share: knob('FJC_FACT_SHARE', 0.3), readKeep: knob('FJC_READ_KEEP', 3_000), denseKeep: knob('FJC_DENSE_KEEP', 32_000), denseShare: knob('FJC_DENSE_SHARE', 0.5) },
   { small: 3_000, share: 0.2, readKeep: 1_500, denseKeep: 0, denseShare: 1 },
   { small: 0, share: 0.1, readKeep: 0, denseKeep: 0, denseShare: 1 },
 ];
@@ -248,6 +268,13 @@ const MUTABLE_SOURCE = /\.(?:log|jsonl|out|err)\b|[\\/]logs?[\\/]|\bjournalctl\b
 // Markers in a read's output that make it an observation of the world (a failure, a timeout, a background job).
 const READ_OBSERVATION = /\b(?:errno|os error|timed? ?out|timeout|permission denied|access is denied|no such file|cannot find|not found|running in background|background with id|exit code [1-9]|killed)\b/i;
 
+// File metadata is a measurement taken at one moment: line counts, sizes and modification times change with every
+// edit, and the agent quotes them as evidence. A read that reports metadata (`wc`, `stat`, `du`, `df`, a long
+// listing) is an observation, alone or inside a compound command (seen in practice: `wc -l f && sed -n 1,140p f`
+// and `cat card; ls -la dir` were shrunk to re-run lines and lost a line count and a size/mtime row).
+const METADATA_VERBS = new Set(['wc', 'stat', 'du', 'df', 'dir', 'get-childitem', 'gci', 'measure-object']);
+const LONG_LISTING = /^ls\s+(?:\S+\s+)*-[a-zA-Z]*l/;
+
 /** True when re-running the call would give its output back: a read of files, not of the world. */
 export function reproducible(tool: string, input: Record<string, unknown>): boolean {
   if (MUTABLE_SOURCE.test(JSON.stringify(input ?? {}))) return false;
@@ -260,7 +287,9 @@ export function reproducible(tool: string, input: Record<string, unknown>): bool
     if (!words) return true;
     if (GIT_READS.test(words)) return true;
     if (/^sed\s+(-\w*i|--in-place)/.test(words)) return false; // edits in place
-    return READ_VERBS.has(words.split(/\s+/)[0]!.replace(/^["']|["']$/g, '').toLowerCase());
+    const verb = words.split(/\s+/)[0]!.replace(/^["']|["']$/g, '').toLowerCase();
+    if (METADATA_VERBS.has(verb) || LONG_LISTING.test(words)) return false; // metadata is an observation
+    return READ_VERBS.has(verb);
   });
 }
 

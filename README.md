@@ -51,17 +51,19 @@ built-in compaction summary with the original messages.
 
    Nothing is erased. How a result is reduced depends on what it is:
    - A **reproducible read** is a read of files: `Read`, `Grep`, `Glob`, `ls`, `cat`, `rg`, `git log`…, and not
-     logs, JSONL ledgers or followed streams. It shrinks to a one-line re-run note, but only when it is longer than
+     logs, JSONL ledgers, followed streams or file metadata (`wc`, `stat`, `du`, `df`, `ls -l`, `Get-ChildItem`),
+     alone or inside a compound command. It shrinks to a one-line re-run note, but only when it is longer than
      3000 chars and shows no failure, timeout or background-job marker.
    - Any other result is an **observation**, which a re-run would not give back. It keeps:
      - its head, cut on a line boundary;
      - its fact lines (errors, HTTP codes, paths, versions, ids, endpoints, counts, receipts), up to 30% of its size;
+       a line longer than 200 chars is split into pieces first, so a fact deep inside it still counts;
      - its tail;
      - a note naming the `tool_use_id` whose full output stays in the session transcript.
 
    Three kinds of observation are never cut:
    - one of 6000 chars or less;
-   - a dense dump of 20k chars or less, where fact lines are at least half the text;
+   - a dense dump of 32k chars or less, where fact lines are at least half the text;
    - an error result's first 2000 chars.
 7. The rules come in tiers (`RAIL_TIERS`). The strictest tier whose char reduction clears 0.30 is used, so a
    compaction never falls under the hook's 25% fallback because of them. `stats.railTier` reports the tier.
