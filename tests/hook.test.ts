@@ -1,13 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   compactSession,
+  forgetAnswers,
+  offloadOutputs,
+  expireOutputs,
+  saveForSummary,
+  pressure,
   decisionLog,
   decisionLogLines,
   resolveHookConfig,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
-import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
+import { applyDecisions, collectToolCalls, decideCall, fullOutputNote, type Message } from '../src/index.js';
 
 type SessionMessage = Message & { handle?: string };
 
@@ -53,7 +58,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest', saveFullOutputs: true });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -64,6 +69,7 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      saveFullOutputs: true,
     });
   });
 });
@@ -110,6 +116,8 @@ describe('session message mapping', () => {
 });
 
 describe('compactSession', () => {
+  beforeEach(() => forgetAnswers());
+
   it('runs the library over the engine fetch and reports the outcome', async () => {
     const bodies: string[] = [];
     const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k', model: 'jev-x' };
@@ -147,5 +155,164 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('remembered answers', () => {
+  beforeEach(() => forgetAnswers());
+
+  it('does not ask Jev again about calls it already answered for this session', async () => {
+    const messages = [
+      { role: 'user', text: 'fix the build', toolUses: [] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'k1', tool: 'Bash', input: { command: 'npm test' } }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'k1', text: 'FAIL a.test.ts\n' + 'x'.repeat(9000) }] },
+      { role: 'assistant', text: 'fixing', toolUses: [] },
+      { role: 'user', text: 'go on', toolUses: [] },
+    ] as never;
+    let requests = 0;
+    const fetchFn = (async (_url: string, init: { body: string }) => {
+      requests++;
+      const keys = Object.keys(JSON.parse(init.body).questions);
+      const text = JSON.stringify({ answers: Object.fromEntries(keys.map((k) => [k, { type: 'noul', noul: 0.1 }])) });
+      return { status: 200, ok: true, text };
+    }) as never;
+    const config = resolveHookConfig({ apiKey: 'k', preserveRecentMessages: 1 });
+    const first = await compactSession(messages, config, fetchFn);
+    const second = await compactSession(messages, config, fetchFn);
+    expect(requests).toBe(1);
+    expect(second.result.decisions.map((d) => d.action)).toEqual(first.result.decisions.map((d) => d.action));
+  });
+});
+
+describe('pressure', () => {
+  const config = resolveHookConfig({});
+
+  it('falls back to the fixed minimum without usage figures', () => {
+    expect(pressure(undefined, 10_000, config)).toEqual({ minReduction: 0.3, gate: 0.25 });
+  });
+
+  it('asks for what brings the context back under the trigger, overhead included', () => {
+    // 60% of a 200k window, all of it transcript: back to 50% needs 1/6, accepted at 55%
+    const bare = pressure({ tokens: 120_000, window: 200_000 }, 120_000, config);
+    expect(bare.minReduction).toBeCloseTo(1 - 100 / 120, 5);
+    expect(bare.gate).toBeCloseTo(1 - 110 / 120, 5);
+    // 20k of the 120k is system prompt and tools, which do not shrink: the transcript must give more
+    const withOverhead = pressure({ tokens: 120_000, window: 200_000 }, 100_000, config);
+    expect(withOverhead.minReduction).toBeCloseTo(1 - 80 / 100, 5);
+    // a full window needs far more; a manual /compact at low fill needs almost nothing
+    expect(pressure({ tokens: 190_000, window: 200_000 }, 190_000, config).minReduction).toBeGreaterThan(0.45);
+    expect(pressure({ tokens: 40_000, window: 200_000 }, 40_000, config)).toEqual({ minReduction: 0.05, gate: 0 });
+  });
+});
+
+describe('offloadOutputs', () => {
+  const full = `status=failed pid 4242\n${'trace line\n'.repeat(900)}`;
+  const original = [
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 't1', tool: 'Bash', input: { command: 'deploy' } }] },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 't1', text: full }] },
+  ] as Message[];
+  const stub = `status=failed pid 4242\n[fast-jev-compaction omitted 9000 chars; ${fullOutputNote('t1')}]`;
+  const compacted = [original[0]!, { ...original[1]!, toolResults: [{ tool_use_id: 't1', text: stub }] }] as Message[];
+
+  it('saves the full output of a reduced result and points its note to the file', async () => {
+    const files = new Map<string, string>();
+    const out = await offloadOutputs(original as never, compacted, 'C:/p/.claude/fast-jev/s1', {
+      write: async (path, text) => void files.set(path, text),
+    });
+    expect(files.get('C:/p/.claude/fast-jev/s1/t1.txt')).toBe(full);
+    expect(files.get('C:/p/.claude/fast-jev/.gitignore')).toBe('*\n');
+    const text = out[1]!.toolResults![0]!.text;
+    expect(text).toContain('the full output is saved at C:/p/.claude/fast-jev/s1/t1.txt');
+    expect(text).not.toContain(fullOutputNote('t1'));
+  });
+
+  it('keeps the transcript note when the write fails', async () => {
+    const out = await offloadOutputs(original as never, compacted, 'C:/p/.claude/fast-jev/s1', {
+      write: async () => {
+        throw new Error('EACCES');
+      },
+    });
+    expect(out[1]!.toolResults![0]!.text).toBe(stub);
+  });
+
+  it('leaves untouched results and re-run notes alone', async () => {
+    const files = new Map<string, string>();
+    const out = await offloadOutputs(original as never, original, 'C:/p/.claude/fast-jev/s1', {
+      write: async (path, text) => void files.set(path, text),
+    });
+    expect(files.size).toBe(0);
+    expect(out[1]).toBe(original[1]);
+  });
+});
+
+describe('saveForSummary', () => {
+  it('saves every long output with an index and returns the line for the summarizer', async () => {
+    const files = new Map<string, string>();
+    const messages = [
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'a1', tool: 'Bash', input: { command: 'make' } }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'a1', text: `error: ${'x'.repeat(300)}` }] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'a2', tool: 'Bash', input: { command: 'true' } }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'a2', text: 'ok' }] },
+    ] as Message[];
+    const line = await saveForSummary(messages as never, 'C:/p/.claude/fast-jev/s1', {
+      write: async (path, text) => void files.set(path, text),
+    });
+    expect(files.has('C:/p/.claude/fast-jev/s1/a1.txt')).toBe(true);
+    expect(files.has('C:/p/.claude/fast-jev/s1/a2.txt')).toBe(false); // short output: not worth a file
+    const index = [...files.entries()].find(([path]) => /index-\d+\.txt$/.test(path));
+    expect(index?.[1]).toMatch(/^a1\tBash\t\{"command":"make"\}\t307 chars\n$/);
+    expect(line).toContain('C:/p/.claude/fast-jev/s1');
+  });
+
+  it('returns undefined when a write fails, so the summary goes ahead without the line', async () => {
+    const messages = [{ role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'a1', text: 'y'.repeat(500) }] }] as Message[];
+    expect(await saveForSummary(messages as never, 'C:/p/x/s', { write: async () => { throw new Error('EACCES'); } })).toBeUndefined();
+  });
+});
+
+describe('saved outputs: secrets, age and paths', () => {
+  const key = `sk-${'proj'}-${'aB3dE6gH9jK2mN5pQ8sT'.repeat(2)}`;
+
+  it('masks secret values in the saved copy, not in the context note', async () => {
+    const files = new Map<string, string>();
+    const original = [
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 't1', tool: 'Bash', input: { command: 'env' } }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 't1', text: `OPENAI_API_KEY=${key}\n${'line\n'.repeat(2000)}` }] },
+    ] as Message[];
+    const compacted = [original[0]!, { ...original[1]!, toolResults: [{ tool_use_id: 't1', text: `[fast-jev-compaction omitted; ${fullOutputNote('t1')}]` }] }] as Message[];
+    await offloadOutputs(original as never, compacted, 'C:/p/.claude/fast-jev/cache/s1', { write: async (path, text) => void files.set(path, text) });
+    const saved = files.get('C:/p/.claude/fast-jev/cache/s1/t1.txt')!;
+    expect(saved).not.toContain(key);
+    expect(saved).toContain('OPENAI_API_KEY=[REDACTED:sk-proj]');
+  });
+
+  it('keeps a hostile tool_use_id inside the session folder', async () => {
+    const files = new Map<string, string>();
+    const id = '../../../evil';
+    const original = [{ role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: id, text: 'x'.repeat(9000) }] }] as Message[];
+    const compacted = [{ role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: id, text: `[stub; ${fullOutputNote(id)}]` }] }] as Message[];
+    await offloadOutputs(original as never, compacted, 'C:/p/.claude/fast-jev/cache/s1', { write: async (path, text) => void files.set(path, text) });
+    const written = [...files.keys()].filter((path) => path.endsWith('.txt'));
+    expect(written).toEqual(['C:/p/.claude/fast-jev/cache/s1/.._.._.._evil.txt']);
+  });
+
+  it('empties saved outputs older than 30 days and leaves fresh ones', async () => {
+    const now = Date.UTC(2026, 9, 30);
+    const day = 24 * 60 * 60 * 1000;
+    const files = new Map<string, { text: string; mtimeMs: number }>([
+      ['R/s-old/a.txt', { text: 'old output', mtimeMs: now - 31 * day }],
+      ['R/s-new/b.txt', { text: 'new output', mtimeMs: now - day }],
+    ]);
+    const fs = {
+      write: async (path: string, text: string) => void files.set(path, { text, mtimeMs: now }),
+      list: async (path: string) =>
+        path === 'R'
+          ? [{ name: 's-old', kind: 'dir', size: 0 }, { name: 's-new', kind: 'dir', size: 0 }]
+          : [...files.entries()].filter(([p]) => p.startsWith(`${path}/`)).map(([p, f]) => ({ name: p.slice(path.length + 1), kind: 'file', size: f.text.length })),
+      stat: async (path: string) => ({ mtimeMs: files.get(path)!.mtimeMs }),
+    };
+    expect(await expireOutputs('R', fs, now)).toBe(1);
+    expect(files.get('R/s-old/a.txt')!.text).toBe('');
+    expect(files.get('R/s-new/b.txt')!.text).toBe('new output');
   });
 });

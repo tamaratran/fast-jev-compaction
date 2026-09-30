@@ -31,7 +31,7 @@
     "minReductionRatio": {
       "type": "number",
       "title": "Minimum reduction ratio",
-      "description": "Minimum estimated character reduction required to replace history.",
+      "description": "Minimum estimated character reduction required to replace history when the context window's fill is unknown; otherwise the window decides.",
       "default": 0.25
     },
     "maxStateTokens": {
@@ -57,6 +57,12 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "saveFullOutputs": {
+      "type": "boolean",
+      "title": "Save full outputs",
+      "description": "Save the full output of every tool result a compaction reduces, secret values masked, under .claude/fast-jev/cache/<session>/ in the project (git-ignored, kept 30 days), and point its note there.",
+      "default": true
     }
   }
 }

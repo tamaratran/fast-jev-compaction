@@ -225,12 +225,23 @@ export interface Rails {
 // ponytail: calibration knobs; the env override exists for the offline sweep and is absent in the hook sandbox,
 // where globalThis.process may not exist. It moves tier 0 only.
 const knob = (name: string, fallback: number) => Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.[name] ?? fallback);
+const TIER0: Rails = { small: knob('FJC_SMALL_KEEP', 6_000), share: knob('FJC_FACT_SHARE', 0.3), readKeep: knob('FJC_READ_KEEP', 3_000), denseKeep: knob('FJC_DENSE_KEEP', 32_000), denseShare: knob('FJC_DENSE_SHARE', 0.5) };
+// Reads give way first (a re-run gives them back), then observations lose rails step by step.
 export const RAIL_TIERS: readonly Rails[] = [
-  { small: knob('FJC_SMALL_KEEP', 6_000), share: knob('FJC_FACT_SHARE', 0.3), readKeep: knob('FJC_READ_KEEP', 3_000), denseKeep: knob('FJC_DENSE_KEEP', 32_000), denseShare: knob('FJC_DENSE_SHARE', 0.5) },
-  { small: 3_000, share: 0.2, readKeep: 1_500, denseKeep: 0, denseShare: 1 },
+  TIER0,
+  { ...TIER0, readKeep: 0 },
+  { small: 3_000, share: 0.2, readKeep: 0, denseKeep: 0, denseShare: 1 },
   { small: 0, share: 0.1, readKeep: 0, denseKeep: 0, denseShare: 1 },
 ];
-export const RAIL_FLOOR = 0.3; // clears the hook's 25% minimum with a margin
+export const RAIL_FLOOR = knob('FJC_RAIL_FLOOR', 0.3); // default minimum reduction; the hook passes its own
+
+/**
+ * Where a reduced result's full output is: the phrase every fact stub and last-resort note carries. The hook swaps it
+ * for the path of a file holding the full output (see `offloadOutputs` in hooks/fast-jev.ts).
+ */
+export function fullOutputNote(id: string): string {
+  return `the full output stays in this session's transcript under ${id}`;
+}
 
 /** A reduced result that keeps its head, its fact lines and its tail; an error keeps more. */
 export function factStubText(text: string, isError: boolean, headChars: number, factBudget: number, id?: string, rails: Rails = RAIL_TIERS[0]!): string {
@@ -242,7 +253,7 @@ export function factStubText(text: string, isError: boolean, headChars: number, 
   const tailStart = tailNl === -1 || tailNl >= text.length - 1 ? text.length - TAIL_CHARS : tailNl + 1;
   if (text.length <= rails.denseKeep && factLines(text, Number.MAX_SAFE_INTEGER).reduce((n, l) => n + l.length + 1, 0) >= text.length * rails.denseShare) return text;
   const facts = factLines(text.slice(headEnd, tailStart), Math.max(factBudget, Math.floor(text.length * rails.share)));
-  const where = id ? `the full output stays in this session's transcript under ${id}` : 'the full output stays in the session transcript';
+  const where = id ? fullOutputNote(id) : 'the full output stays in the session transcript';
   return `${text.slice(0, headEnd)}\n[fast-jev-compaction omitted ${tailStart - headEnd} chars of this tool result${isError ? ' (error)' : ''}${
     facts.length ? `; kept its ${facts.length} fact line(s)` : ''
   }; ${where}]\n${facts.length ? `${facts.join('\n')}\n…\n` : ''}${text.slice(tailStart)}`;
@@ -293,9 +304,13 @@ export function reproducible(tool: string, input: Record<string, unknown>): bool
   });
 }
 
+/** The marker every reduced result carries (re-run notes, fact stubs, truncations). */
+const COMPACTED_MARK = /\[fast-jev-compaction (?:omitted|truncated) /;
+
 /** One line for a reproducible read: the call (brief) stays, its output is a note. */
-function rerunNote(text: string): string {
-  return text.length <= 160 ? text : `[fast-jev-compaction omitted ${text.length} chars: a reproducible read, re-run the tool to see it]`;
+function rerunNote(text: string, id: string): string {
+  // The note also names where the full output is: a file can change after the read, and the hook saves the output.
+  return text.length <= 160 ? text : `[fast-jev-compaction omitted ${text.length} chars: a reproducible read, re-run the tool to see it; ${fullOutputNote(id)}]`;
 }
 
 /** String fields of a stubbed call's input cut to `max` chars: the call stays readable, not verbatim. */
@@ -320,7 +335,7 @@ export function applyDecisions(
   calls: readonly ToolCall[],
   headChars: number,
   keepFacts = true,
-  rails: Rails = RAIL_TIERS[0]!,
+  rails: Rails | ((toolUseId: string) => Rails) = RAIL_TIERS[0]!,
 ): Message[] {
   const byId = new Map(calls.map((call) => [call.id, call]));
   const actions = new Map<string, CallDecision['action']>();
@@ -404,19 +419,16 @@ function applyFactStubs(
   messages: readonly Message[],
   actions: ReadonlyMap<string, CallDecision['action']>,
   headChars: number,
-  rails: Rails,
+  railsFor: Rails | ((toolUseId: string) => Rails),
 ): Message[] {
-  const rerunnable = new Set<string>();
-  for (const message of messages) {
-    for (const tool of message.toolUses) if (reproducible(tool.tool, tool.input)) rerunnable.add(tool.tool_use_id);
-  }
+  const rerunnable = rerunnableIds(messages);
+  const rails = (id: string): Rails => (typeof railsFor === 'function' ? railsFor(id) : railsFor);
   // A read's output is replaced by a re-run line only when it is long and reads like a plain read: a short output is
   // cheap and kept like any observation, and a read that timed out, failed or went to the background is an
   // observation (a held-out check lost 4 facts to re-run lines on 600-900 char outputs).
-  const reduce = (id: string, text: string, isError: boolean) =>
-    rerunnable.has(id) && !isError && text.length > rails.readKeep && !READ_OBSERVATION.test(text)
-      ? rerunNote(text)
-      : factStubText(text, isError, headChars, FACT_BUDGET_CHARS, id, rails);
+  // Idempotent: a result an earlier compaction already reduced carries our marker and is final; reducing a fact stub
+  // again would cut the fact lines it kept.
+  const reduce = (id: string, text: string, isError: boolean) => reducedText(id, text, isError, headChars, rails(id), rerunnable);
   return messages.map((message) => {
     let changed = false;
     const toolUses = message.toolUses.map((tool) => {
@@ -446,6 +458,21 @@ function applyFactStubs(
   });
 }
 
+function rerunnableIds(messages: readonly Message[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const tool of message.toolUses) if (reproducible(tool.tool, tool.input)) ids.add(tool.tool_use_id);
+  }
+  return ids;
+}
+
+/** One result under one rail tier (see applyFactStubs). */
+function reducedText(id: string, text: string, isError: boolean, headChars: number, rails: Rails, rerunnable: ReadonlySet<string>): string {
+  if (COMPACTED_MARK.test(text)) return text;
+  if (rerunnable.has(id) && !isError && text.length > rails.readKeep && !READ_OBSERVATION.test(text)) return rerunNote(text, id);
+  return factStubText(text, isError, headChars, FACT_BUDGET_CHARS, id, rails);
+}
+
 /** Characters of text, tool input and tool output a message holds. */
 export function messageChars(message: Message): number {
   let total = message.text.length;
@@ -461,23 +488,136 @@ export function messageChars(message: Message): number {
 }
 
 /**
- * The decisions applied under the strictest rail tier whose char reduction clears RAIL_FLOOR; the last tier is used
- * when none does. Keeps facts first and gives up rails only as far as the reduction needs.
+ * The decisions applied with as few rails given up as the reduction `minReduction` (default RAIL_FLOOR) needs: result
+ * by result, the step that frees the most chars per fact-like token lost goes first (greedyRails). When even the
+ * strictest tier is not enough, the oldest results give way (lastResort) instead of the history failing the minimum.
  */
 export function applyWithRails(
   messages: readonly Message[],
   decisions: readonly CallDecision[],
   calls: readonly ToolCall[],
   headChars: number,
+  minReduction?: number,
 ): { messages: Message[]; tier: number } {
   const before = messages.reduce((sum, message) => sum + messageChars(message), 0);
-  let out: Message[] = [];
-  for (const [tier, rails] of RAIL_TIERS.entries()) {
-    out = applyDecisions(messages, decisions, calls, headChars, true, rails);
-    const after = out.reduce((sum, message) => sum + messageChars(message), 0);
-    if (before === 0 || (before - after) / before >= RAIL_FLOOR || tier === RAIL_TIERS.length - 1) return { messages: out, tier };
+  const floor = minReduction ?? RAIL_FLOOR;
+  const railed = greedyRails(messages, decisions, calls, headChars, before, floor);
+  if (before === 0) return railed;
+  const evicted = lastResort(railed.messages, decisions, calls, before * (1 - floor));
+  return evicted === railed.messages ? railed : { messages: evicted, tier: RAIL_TIERS.length };
+}
+
+/**
+ * When even the strictest tier leaves the history above `target` chars (repeated compactions of a long session fill
+ * the window with kept facts), the oldest results give way first instead of the whole history falling back to a
+ * summary: (1) an old result keeps only its fact lines and its note, (2) the oldest results become one-line notes.
+ * The full outputs stay in the session transcript. Pinned calls and calls Jev decided to keep are never touched.
+ */
+function lastResort(messages: Message[], decisions: readonly CallDecision[], calls: readonly ToolCall[], target: number): Message[] {
+  let total = messages.reduce((sum, message) => sum + messageChars(message), 0);
+  if (total <= target) return messages;
+  const dropped = new Set(decisions.filter((decision) => decision.action !== 'keep').map((decision) => decision.id));
+  const order = calls.filter((call) => !call.pinned && dropped.has(call.id)).map((call) => call.tool_use_id);
+  const texts = new Map<string, string>();
+  for (const message of messages) for (const result of message.toolResults ?? []) texts.set(result.tool_use_id, result.text);
+  const set = (id: string, next: string) => {
+    total -= texts.get(id)!.length - next.length;
+    texts.set(id, next);
+  };
+  for (const id of order) {
+    if (total <= target) break;
+    const text = texts.get(id);
+    if (text === undefined) continue;
+    const notes = text.split('\n').filter((line) => COMPACTED_MARK.test(line));
+    const note = notes.length > 0 ? notes : [`[fast-jev-compaction omitted ${text.length} chars: only fact lines kept under context pressure; ${fullOutputNote(id)}]`];
+    const next = [...factLines(text, Math.floor(text.length * 0.25)), ...note].join('\n');
+    if (next.length < text.length) set(id, next);
   }
-  return { messages: out, tier: RAIL_TIERS.length - 1 };
+  for (const id of order) {
+    if (total <= target) break;
+    const text = texts.get(id);
+    if (text === undefined) continue;
+    const next = `[fast-jev-compaction omitted ${text.length} chars: evicted under context pressure, oldest first; ${fullOutputNote(id)}]`;
+    if (next.length < text.length) set(id, next);
+  }
+  return messages.map((message) =>
+    message.toolResults?.some((result) => texts.get(result.tool_use_id) !== result.text)
+      ? { ...message, toolResults: message.toolResults.map((result) => ({ ...result, text: texts.get(result.tool_use_id) ?? result.text })) }
+      : message,
+  );
+}
+
+/**
+ * Escalates result by result instead of tier by tier: starting from tier 0, the result whose next tier frees the most
+ * characters is escalated first, until the reduction clears the floor. Fewer results are cut, so fewer facts go.
+ */
+function greedyRails(
+  messages: readonly Message[],
+  decisions: readonly CallDecision[],
+  calls: readonly ToolCall[],
+  headChars: number,
+  before: number,
+  floor: number,
+): { messages: Message[]; tier: number } {
+  const byId = new Map(calls.map((call) => [call.id, call]));
+  const dropped = new Set(decisions.filter((d) => d.action !== 'keep').map((d) => byId.get(d.id)?.tool_use_id).filter((id): id is string => !!id));
+  const rerunnable = rerunnableIds(messages);
+  const texts = new Map<string, { text: string; isError: boolean }>();
+  for (const m of messages) for (const r of m.toolResults ?? []) if (dropped.has(r.tool_use_id)) texts.set(r.tool_use_id, { text: r.text, isError: r.isError ?? false });
+  const lengths = new Map<string, number>();
+  const len = (id: string, tier: number): number => {
+    const key = `${tier}:${id}`;
+    const hit = lengths.get(key);
+    if (hit !== undefined) return hit;
+    const t = texts.get(id)!;
+    const n = reducedText(id, t.text, t.isError, headChars, RAIL_TIERS[tier]!, rerunnable).length;
+    lengths.set(key, n);
+    return n;
+  };
+  // Fact-like tokens (numbers, hex ids, paths) a result would lose by going from one tier to another.
+  const FACT_TOKEN = /[A-Za-z]:[\\/][^\s"'<>]+|\/(?:[\w.@-]+\/)+[\w.@-]+|\b[0-9a-f]{7,40}\b|\b\d[\d.,:]*\d\b/gi;
+  const tokens = new Map<string, Set<string>>();
+  const tokenSet = (id: string, tier: number): Set<string> => {
+    const key = `${tier}:${id}`;
+    let set = tokens.get(key);
+    if (!set) {
+      const t = texts.get(id)!;
+      set = new Set(reducedText(id, t.text, t.isError, headChars, RAIL_TIERS[tier]!, rerunnable).match(FACT_TOKEN) ?? []);
+      tokens.set(key, set);
+    }
+    return set;
+  };
+  const lost = (id: string, from: number, to: number): number => {
+    const after = tokenSet(id, to);
+    let n = 0;
+    for (const token of tokenSet(id, from)) if (!after.has(token)) n++;
+    return n;
+  };
+  const level = new Map<string, number>();
+  const railsFor = (id: string): Rails => RAIL_TIERS[level.get(id) ?? 0]!;
+  let out = applyDecisions(messages, decisions, calls, headChars, true, railsFor);
+  let after = out.reduce((sum, message) => sum + messageChars(message), 0);
+  const need = before * (1 - floor);
+  let top = 0;
+  while (after > need && before > 0) {
+    let best: { id: string; tier: number; gain: number; score: number } | undefined;
+    for (const id of texts.keys()) {
+      const cur = level.get(id) ?? 0;
+      for (let tier = cur + 1; tier < RAIL_TIERS.length; tier++) {
+        const gain = len(id, cur) - len(id, tier);
+        if (gain <= 0) continue; // a tier that does not touch this result: look further
+        const score = gain / (1 + lost(id, cur, tier));
+        if (!best || score > best.score) best = { id, tier, gain, score };
+        break;
+      }
+    }
+    if (!best) break;
+    level.set(best.id, best.tier);
+    top = Math.max(top, best.tier);
+    after -= best.gain;
+  }
+  out = applyDecisions(messages, decisions, calls, headChars, true, railsFor);
+  return { messages: out, tier: top };
 }
 
 export function reductionRatio(result: Pick<CompactResult, 'stats'>): number {
@@ -555,12 +695,25 @@ export async function compact(
   const started = Date.now();
   const resolved = resolveOptions(options);
   const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
-  const candidates = calls.filter((call) => !call.pinned);
+  // A call whose result an earlier compaction already reduced is final (see applyFactStubs): Jev's answer about it
+  // would change nothing, so it is not asked. On a re-compaction this skips most old calls.
+  const reduced = new Set(
+    messages.flatMap((m) => [
+      ...(m.toolResults ?? []).filter((r) => COMPACTED_MARK.test(r.text)).map((r) => r.tool_use_id),
+      ...m.toolUses.filter((t) => t.text !== undefined && COMPACTED_MARK.test(t.text)).map((t) => t.tool_use_id),
+    ]),
+  );
+  const known = options.knownAnswers;
+  const candidates = calls.filter((call) => !call.pinned && !reduced.has(call.tool_use_id) && !known?.has(call.tool_use_id));
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
   let requests = 0;
   const answers = new Map<string, CallAnswer>();
+  for (const call of calls) {
+    const answer = known?.get(call.tool_use_id);
+    if (answer && !call.pinned) answers.set(call.id, answer);
+  }
   if (candidates.length > 0) {
     const { groups, floor, stage } = stateGroups(messages, calls, candidates, resolved);
     fitted = { tokens: Math.max(0, ...groups.map((g) => g.state.tokens)), stage };
@@ -570,12 +723,13 @@ export async function compact(
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
     // A call no window could fit gets the fact rails without Jev (its modal answer: drop the call, keep facts).
     for (const call of floor) answers.set(call.id, { keepCall: 0, keepResult: 0 });
+    if (known) for (const call of candidates) if (answers.has(call.id) && !floor.includes(call)) known.set(call.tool_use_id, answers.get(call.id)!);
   }
 
   const decisions = calls.map((call) =>
-    decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
+    decideCall(call, answers.get(call.id) ?? (reduced.has(call.tool_use_id) ? { keepCall: 0, keepResult: 0 } : { keepCall: 1, keepResult: 1 }), resolved),
   );
-  const { messages: kept, tier: railTier } = applyWithRails(messages, decisions, calls, resolved.truncateHeadChars);
+  const { messages: kept, tier: railTier } = applyWithRails(messages, decisions, calls, resolved.truncateHeadChars, options.minReduction);
   return {
     messages: kept,
     decisions,

@@ -105,6 +105,16 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Jev's answers from an earlier compaction of the same session, by `tool_use_id`. Calls found here are not asked
+   * again (re-asking gave the same action on 711/711 calls). `compact` adds the new answers to a mutable map.
+   */
+  knownAnswers?: Map<string, CallAnswer>;
+  /**
+   * The char reduction the rails must reach (default 0.3). The hook passes what the context window needs (see
+   * `pressure` in hooks/fast-jev.ts), so a compaction gives up no more facts than the window requires.
+   */
+  minReduction?: number;
 }
 
 export interface ResolvedCompactOptions {

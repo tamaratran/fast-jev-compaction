@@ -13,6 +13,7 @@ import {
   compact,
   compactMessages,
   decideCall,
+  messageChars,
   estimateTokens,
   fitState,
   JevClient,
@@ -652,5 +653,43 @@ describe('windowed states when the history does not fit', () => {
     expect(seen.length).toBe(0);
     expect(result.stats.stateStage).toMatch(/floor:\d+/);
     expect(result.decisions.filter((d) => d.action === 'drop_call').length).toBe(collectToolCalls(messages, 2).filter((c) => !c.pinned).length);
+  });
+});
+
+describe('rails under a minimum reduction', () => {
+  function observations(n: number): Message[] {
+    const out: Message[] = [message('user', 'Audit the services.')];
+    for (let i = 0; i < n; i++) {
+      out.push(call(`o${i}`, 'Bash', { command: `curl -s http://127.0.0.1:${8000 + i}/health` }, ''));
+      out.push(result(`o${i}`, `service ${i} status=ok pid ${40000 + i}\n${'log line without facts\n'.repeat(400)}`));
+    }
+    out.push(message('user', 'next'));
+    return out;
+  }
+  const decide = (msgs: Message[], keep: string[] = []) => {
+    const calls = collectToolCalls(msgs, 1);
+    const decisions = calls.map((c) =>
+      decideCall(c, keep.includes(c.tool_use_id) ? { keepCall: 1, keepResult: 1 } : { keepCall: 0.1, keepResult: 0.1 }, resolveOptions({})),
+    );
+    return { calls, decisions };
+  };
+  const chars = (msgs: Message[]) => msgs.reduce((n, m) => n + messageChars(m), 0);
+  const text = (msgs: Message[], id: string) => msgs.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === id)!.text;
+
+  it('gives up no more than the minimum needs: a low minimum keeps the gentlest tier', () => {
+    const msgs = observations(6);
+    const { calls, decisions } = decide(msgs);
+    expect(applyWithRails(msgs, decisions, calls, 200, 0.05).tier).toBe(0);
+  });
+
+  it('evicts the oldest dropped results, never a Jev keep, when even the strictest tier is not enough', () => {
+    const msgs = observations(6);
+    const { calls, decisions } = decide(msgs, ['o0']);
+    const before = chars(msgs);
+    const out = applyWithRails(msgs, decisions, calls, 200, 0.97);
+    expect(out.tier).toBe(RAIL_TIERS.length);
+    expect(text(out.messages, 'o0')).toBe(text(msgs, 'o0')); // Jev said keep
+    expect(text(out.messages, 'o1')).toMatch(/evicted under context pressure|only fact lines kept/);
+    expect(chars(out.messages)).toBeLessThan(before);
   });
 });
