@@ -1,5 +1,5 @@
 import { noulAnswer } from './request.js';
-import { collectToolCalls, estimateTokens, fitState } from './state.js';
+import { collectToolCalls, estimateTokens, fitState, goalFromMessages, isPinned } from './state.js';
 import type {
   CallAnswer,
   CallDecision,
@@ -496,6 +496,57 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
  * sent as state with every batch of questions. Throws when Jev fails or the
  * history cannot be fitted; the caller decides whether to fall back.
  */
+type StateGroup = { state: ReturnType<typeof fitState>; calls: ToolCall[] };
+
+/**
+ * One state for all candidates when the history fits `maxStateTokens`. When it does not (long sessions), the
+ * candidates are split into contiguous windows, halving until each window's state fits: a window's state keeps the
+ * goal, the first message, the pinned tail and its own messages in full, and leaves the rest of the history out.
+ * Relevance of an old call depends mostly on the goal and the recent turns, which every window carries. A single
+ * call whose window still cannot fit goes to `floor` and gets the fact rails without Jev.
+ */
+export function stateGroups(
+  messages: readonly Message[],
+  calls: readonly ToolCall[],
+  candidates: readonly ToolCall[],
+  options: ResolvedCompactOptions,
+): { groups: StateGroup[]; floor: ToolCall[]; stage: string } {
+  // ponytail: test knob to force K windows on a history that fits (agreement experiment); absent in the hook sandbox.
+  const forced = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.['FJC_FORCE_WINDOWS'] ?? 0);
+  if (!forced) {
+    try {
+      const state = fitState(messages, calls, options);
+      return { groups: [{ state, calls: [...candidates] }], floor: [], stage: state.stage };
+    } catch (error) {
+      if (!String((error as Error).message).startsWith('history too large for Jev')) throw error;
+    }
+  }
+  const windowOptions = { ...options, goal: options.goal || goalFromMessages(messages) };
+  const groups: StateGroup[] = [];
+  const floor: ToolCall[] = [];
+  const fit = (group: ToolCall[]): void => {
+    const lo = Math.min(...group.map((c) => c.callIndex));
+    const hi = Math.max(...group.map((c) => c.resultIndex));
+    const inWindow = new Set(group.map((c) => c.id));
+    const view = messages.map((message, i) =>
+      (i >= lo && i <= hi) || isPinned(i, messages.length, options.preserveRecentMessages) ? message : { ...message, text: '' },
+    );
+    try {
+      groups.push({ state: fitState(view, calls.filter((c) => c.pinned || inWindow.has(c.id)), windowOptions), calls: group });
+    } catch (error) {
+      if (!String((error as Error).message).startsWith('history too large for Jev')) throw error;
+      if (group.length === 1) return void floor.push(group[0]!);
+      const half = Math.ceil(group.length / 2);
+      fit(group.slice(0, half));
+      fit(group.slice(half));
+    }
+  };
+  const k = Math.max(2, forced);
+  const size = Math.ceil(candidates.length / k);
+  for (let start = 0; start < candidates.length; start += size) fit(candidates.slice(start, start + size));
+  return { groups, floor, stage: `windows:${groups.length}${floor.length ? ` floor:${floor.length}` : ''}` };
+}
+
 export async function compact(
   messages: readonly Message[],
   asker: JevAsker,
@@ -508,16 +559,17 @@ export async function compact(
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
-  let batches: ToolCall[][] = [];
+  let requests = 0;
   const answers = new Map<string, CallAnswer>();
   if (candidates.length > 0) {
-    const state = fitState(messages, calls, resolved);
-    fitted = state;
-    batches = batchCalls(candidates, state.tokens, resolved);
-    const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
-    );
+    const { groups, floor, stage } = stateGroups(messages, calls, candidates, resolved);
+    fitted = { tokens: Math.max(0, ...groups.map((g) => g.state.tokens)), stage };
+    const jobs = groups.flatMap((g) => batchCalls(g.calls, g.state.tokens, resolved).map((batch) => ({ state: g.state.state, batch })));
+    requests = jobs.length;
+    const answered = await Promise.all(jobs.map((job) => askBatch(asker, job.state, job.batch)));
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
+    // A call no window could fit gets the fact rails without Jev (its modal answer: drop the call, keep facts).
+    for (const call of floor) answers.set(call.id, { keepCall: 0, keepResult: 0 });
   }
 
   const decisions = calls.map((call) =>
@@ -539,7 +591,7 @@ export async function compact(
       pinned: count(decisions, 'pinned'),
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
-      requests: batches.length,
+      requests,
       ms: Date.now() - started,
       railTier,
     },
