@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyDecisions,
+  applyWithRails,
+  RAIL_TIERS,
   batchCalls,
+  briefInput,
+  reproducible,
+  factStubText,
   buildJevRequest,
   collectToolCalls,
   compact,
@@ -279,7 +284,7 @@ describe('decisions', () => {
       decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.1 }, options),
       decideCall(calls[2]!, { keepCall: 0.9, keepResult: 0.9 }, options),
     ];
-    const kept = applyDecisions(messages, decisions, calls, 300);
+    const kept = applyDecisions(messages, decisions, calls, 300, false);
 
     expect(kept.map((m) => m.text || m.toolUses[0]?.tool_use_id || m.toolResults?.[0]?.tool_use_id)).toEqual([
       'Never edit anything under src/generated. Fix the failing test.',
@@ -307,7 +312,7 @@ describe('decisions', () => {
     const shortMessages = transcript();
     shortMessages[4]!.toolUses[0]!.text = 'y'.repeat(100);
     shortMessages[5]!.toolResults![0]!.text = 'y'.repeat(100);
-    const shortKept = applyDecisions(shortMessages, decisions, calls, 300);
+    const shortKept = applyDecisions(shortMessages, decisions, calls, 300, false);
     expect(shortKept[2]).toBe(shortMessages[4]);
     expect(shortKept[3]).toBe(shortMessages[5]);
   });
@@ -319,13 +324,13 @@ describe('decisions', () => {
     const original = messages[2]!.toolResults![0]!.text;
     const total = original.length;
 
-    const kept = applyDecisions(messages, decisions, calls, 50);
+    const kept = applyDecisions(messages, decisions, calls, 50, false);
     expect(kept[2]?.toolResults?.[0]?.text).toBe(
       `${original.slice(0, 50)}\n[fast-jev-compaction truncated ${total - 50} chars of this tool result; re-run the tool if needed]`,
     );
     expect(kept[1]?.toolUses[0]?.text).toBe(kept[2]?.toolResults?.[0]?.text);
 
-    const noHead = applyDecisions(messages, decisions, calls, 0);
+    const noHead = applyDecisions(messages, decisions, calls, 0, false);
     expect(noHead[2]?.toolResults?.[0]?.text).toBe(
       `[fast-jev-compaction truncated ${total} chars of this tool result; re-run the tool if needed]`,
     );
@@ -429,5 +434,153 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('fact stubs', () => {
+  it('keeps error, path, version, id, endpoint and count lines of an omitted middle', () => {
+    const middle = [
+      'plain filler line without anything',
+      '-rw-r--r-- 1 user user 179655 Sep 29 03:59 agents-index.ts',
+      'GET https://mcp.unframer.co/.well-known/oauth-authorization-server HTTP 404',
+      '@codex-codegraph | live | node.exe | pid 43748',
+      'figma-desktop err=Failed to connect to 127.0.0.1:3845',
+      'node_modules/partyserver 0.4.1',
+      '27b19d7f3962fec8 *agents-index.ts',
+    ].join('\n');
+    const text = `${'h'.repeat(300)}\n${'filler\n'.repeat(500)}${middle}\n${'filler\n'.repeat(500)}${'t'.repeat(200)}`; // > SMALL_KEEP
+    const stub = factStubText(text, false, 300, 600);
+    for (const fact of ['179655', 'oauth-authorization-server HTTP 404', 'pid 43748', '127.0.0.1:3845', 'partyserver 0.4.1', '27b19d7f3962fec8']) {
+      expect(stub).toContain(fact);
+    }
+    expect(stub).not.toContain('plain filler line');
+    expect(stub.startsWith('h'.repeat(300))).toBe(true);
+    expect(stub.endsWith('t'.repeat(120))).toBe(true);
+    expect(stub.length).toBeLessThan(text.length / 2);
+  });
+
+  it('keeps short results whole, errors longer, and a dropped call as a brief stub instead of erasing it', () => {
+    expect(factStubText('short', false, 300, 600)).toBe('short');
+    const error = `Traceback\n${'e'.repeat(1_900)}`;
+    expect(factStubText(error, true, 300, 600)).toBe(error);
+    const messages = transcript();
+    messages[7]!.toolResults![0]!.text = `${'x'.repeat(2_000)}\nFAIL b.test.ts expected 2 to be 3\n${'x'.repeat(2_000)}`;
+    const calls = collectToolCalls(messages, 0);
+    const decisions = calls.map((call) => decideCall(call, { keepCall: 0.1, keepResult: 0.1 }, { keepThreshold: 0.5 }));
+    const kept = applyDecisions(messages, decisions, calls, 300);
+    expect(kept).toHaveLength(messages.length);
+    expect(kept[7]?.toolResults?.[0]?.text).toContain('FAIL b.test.ts expected 2 to be 3');
+    expect(kept[0]).toBe(messages[0]);
+    expect(briefInput({ command: 'a'.repeat(500), n: 1 }, 300)).toEqual({ command: `${'a'.repeat(300)}…[200 chars]`, n: 1 });
+  });
+});
+
+describe('fact stubs: drop what a re-run gives back', () => {
+  it('tells reproducible reads of files from observations of the world and side effects', () => {
+    const yes = [
+      ['Read', { file_path: 'src/a.ts' }],
+      ['Grep', { pattern: 'x' }],
+      ['Bash', { command: 'ls -la F:/Temp/ucp 2>&1 | head -40; echo ---; find F:/Temp/ucp -maxdepth 3 -type d' }],
+      ['Bash', { command: 'cd F:/Temp/ucp && sha256sum *.ts | cut -c1-16' }],
+      ['Bash', { command: 'git log --oneline | head -5' }],
+      ['PowerShell', { command: "rg -l -i 'x' 'C:/st' 2>&1 | Select-Object -First 20" }],
+    ] as const;
+    const no = [
+      ['Bash', { command: 'curl -s https://mcp.unframer.co/mcp' }],
+      ['Bash', { command: 'timeout 60 mcpc --json 2>&1 | head -c 12000' }],
+      ['Bash', { command: 'netstat -ano | grep 3845; tasklist' }],
+      ['Bash', { command: 'ls > listing.txt' }],
+      ['Bash', { command: "sed -i 's/a/b/' f.txt" }],
+      ['Bash', { command: 'npm test' }],
+      ['Write', { file_path: 'a.ts', content: 'x' }],
+      ['mcp__srv__fetch', { url: 'https://x.org' }],
+    ] as const;
+    for (const [tool, input] of yes) expect(reproducible(tool, input as Record<string, unknown>), `${tool} ${JSON.stringify(input)}`).toBe(true);
+    for (const [tool, input] of no) expect(reproducible(tool, input as Record<string, unknown>), `${tool} ${JSON.stringify(input)}`).toBe(false);
+  });
+
+  it('shrinks a dropped reproducible read to one line but keeps an observation as a fact stub', () => {
+    const big = `${'x'.repeat(3_500)}\nGET https://a.example/.well-known/oauth HTTP 404\n${'x'.repeat(3_500)}`; // > readKeep and small
+    const messages: Message[] = [
+      { role: 'user', text: 'audit', toolUses: [] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'r1', tool: 'Read', input: { file_path: 'src/a.ts' } }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'r1', text: big }] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'c1', tool: 'Bash', input: { command: 'curl -s https://a.example/.well-known/oauth' } }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'c1', text: big }] },
+    ];
+    const calls = collectToolCalls(messages, 0);
+    const decisions = calls.map((call) => decideCall(call, { keepCall: 0.1, keepResult: 0.1 }, { keepThreshold: 0.5 }));
+    const kept = applyDecisions(messages, decisions, calls, 200);
+    expect(kept[2]?.toolResults?.[0]?.text).toMatch(/^\[fast-jev-compaction omitted \d+ chars: a reproducible read/);
+    expect(kept[1]?.toolUses[0]?.input).toEqual({ file_path: 'src/a.ts' });
+    expect(kept[4]?.toolResults?.[0]?.text).toContain('HTTP 404');
+  });
+});
+
+describe('fact stubs: receipts survive', () => {
+  it('keeps a receipt line of a non-idempotent call deep in an omitted middle', () => {
+    const text = `${'y'.repeat(1_500)}\nmessage_id: 8f3e2a-ticket sent to 3 recipients\n${'y'.repeat(1_500)}`;
+    expect(factStubText(text, false, 200, 360)).toContain('message_id: 8f3e2a-ticket sent');
+  });
+});
+
+describe('fact stubs: hard rails', () => {
+  it('never cuts a short observation, keeps whole lines at the tail, and says where the full output is', () => {
+    const short = `${'a'.repeat(1200)}\ntable vec_episodes no such module: vec0\n${'b'.repeat(1200)}`;
+    expect(factStubText(short, false, 200, 360)).toBe(short); // under 3000 chars: kept whole
+    const body = Array.from({ length: 800 }, (_, i) => `row ${i} ok`).join('\n');
+    const long = `${body}\n36220 32.02000\nend`;
+    const stub = factStubText(long, false, 200, 360, 'toolu_X');
+    expect(stub).toContain('36220 32.02000'); // the line at the tail boundary is not split
+    expect(stub).toContain('the full output stays in this session\'s transcript under toolu_X');
+    expect(stub).not.toContain('re-run the tool');
+  });
+
+  it('gives long dumps a fact budget proportional to their size', () => {
+    const dump = Array.from({ length: 300 }, (_, i) => `pid ${10000 + i} port ${3000 + i} status failed`).join('\n');
+    const kept = factStubText(dump, false, 200, 360).split('\n').filter((l) => l.startsWith('pid ')).length;
+    expect(kept).toBeGreaterThan(40); // 20% of ~12k chars, not 360 chars (about 8 lines)
+  });
+});
+
+describe('fact stubs: logs are observations', () => {
+  it('never treats a read of a log, a JSONL ledger or a followed stream as reproducible', () => {
+    expect(reproducible('Bash', { command: 'tail -c 1500 C:/ops/app/restic.log' })).toBe(false);
+    expect(reproducible('Read', { file_path: 'C:/ops/jev-net/ledger/screen.jsonl' })).toBe(false);
+    expect(reproducible('Bash', { command: 'tail -f /var/log/syslog' })).toBe(false);
+    expect(reproducible('PowerShell', { command: 'Get-Content app.txt -Tail 50' })).toBe(false);
+    expect(reproducible('Bash', { command: 'docker logs web' })).toBe(false);
+    expect(reproducible('Read', { file_path: 'C:/src/app.ts' })).toBe(true); // source files still re-read
+    expect(reproducible('Bash', { command: 'tail -n 20 src/app.ts' })).toBe(true);
+  });
+});
+
+describe('fact stubs: rail tiers, dense dumps, failed reads', () => {
+  const obs = (id: string, text: string, command = 'curl -s https://x.org') => [
+    { role: 'assistant' as const, text: '', toolUses: [{ tool_use_id: id, tool: 'Bash', input: { command } }] },
+    { role: 'user' as const, text: '', toolUses: [], toolResults: [{ tool_use_id: id, text }] },
+  ];
+  const run = (messages: any[]) => {
+    const calls = collectToolCalls(messages, 0);
+    const decisions = calls.map((c: any) => ({ id: c.id, tool: c.tool, action: 'drop_call' as const, reason: 'call_dropped' as const, keepCall: 0.1, keepResult: 0.1 }));
+    return applyWithRails(messages, decisions, calls, 200);
+  };
+
+  it('gives up rails tier by tier instead of falling under the reduction floor', () => {
+    const five = Array.from({ length: 120 }, (_, i) => `line ${i} plain words here`).join('\n'); // ~3.4k, under tier 0 small
+    const out = run([{ role: 'user', text: 'go', toolUses: [] }, ...obs('toolu_A', five), ...obs('toolu_B', five)]);
+    expect(out.tier).toBeGreaterThan(0); // tier 0 keeps both whole: no reduction
+  });
+
+  it('keeps a dense table whole at tier 0 and turns a failed short read into an observation', () => {
+    const table = Array.from({ length: 300 }, (_, i) => `F:/Projects/p${i} ${3000 + i} ${19602045188 + i}`).join('\n'); // ~12k, all facts
+    const big = 'x'.repeat(40_000); // plenty of reducible filler elsewhere
+    const out = run([{ role: 'user', text: 'go', toolUses: [] }, ...obs('toolu_T', table), ...obs('toolu_X', big),
+      ...obs('toolu_F', "find: '/c/nope': No such file or directory\nCommand did not complete within its 120s timeout", 'find /c/nope -name x')]);
+    expect(out.tier).toBe(0);
+    const text = (id: string) => out.messages.flatMap((m: any) => m.toolResults ?? []).find((r: any) => r.tool_use_id === id)?.text ?? '';
+    expect(text('toolu_T')).toContain('F:/Projects/p150 3150'); // dense dump kept whole
+    expect(text('toolu_F')).toContain('120s timeout'); // not a re-run line
+    expect(RAIL_TIERS[0]!.denseKeep).toBeGreaterThan(0);
   });
 });

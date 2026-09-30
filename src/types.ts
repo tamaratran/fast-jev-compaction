@@ -135,6 +135,8 @@ export interface CompactResult {
     stateStage: string;
     requests: number;
     ms: number;
+    /** Rail tier used (0 = strictest); a higher tier gave up rails to clear the reduction floor. */
+    railTier?: number;
   };
 }
 

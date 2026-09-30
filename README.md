@@ -46,12 +46,26 @@ built-in compaction summary with the original messages.
    concurrently and their answers are merged.
 6. Decisions per call, against `keepThreshold`:
    - `keepResult ≥ threshold` → keep call and result;
-   - else `keepCall ≥ threshold` → keep the call, truncate the result to its
-     first `truncateHeadChars` characters plus a one-line note;
-   - else → remove the call together with its result.
-7. The message list is rebuilt: a message that loses all its content is
-   removed, untouched messages are returned as the same objects, and no result
-   is ever left without its call.
+   - else `keepCall ≥ threshold` → keep the call and reduce the result;
+   - else → keep a brief call (input fields cut to 200 chars) and reduce the result.
+
+   Nothing is erased. How a result is reduced depends on what it is:
+   - A **reproducible read** is a read of files: `Read`, `Grep`, `Glob`, `ls`, `cat`, `rg`, `git log`…, and not
+     logs, JSONL ledgers or followed streams. It shrinks to a one-line re-run note, but only when it is longer than
+     3000 chars and shows no failure, timeout or background-job marker.
+   - Any other result is an **observation**, which a re-run would not give back. It keeps:
+     - its head, cut on a line boundary;
+     - its fact lines (errors, HTTP codes, paths, versions, ids, endpoints, counts, receipts), up to 30% of its size;
+     - its tail;
+     - a note naming the `tool_use_id` whose full output stays in the session transcript.
+
+   Three kinds of observation are never cut:
+   - one of 6000 chars or less;
+   - a dense dump of 20k chars or less, where fact lines are at least half the text;
+   - an error result's first 2000 chars.
+7. The rules come in tiers (`RAIL_TIERS`). The strictest tier whose char reduction clears 0.30 is used, so a
+   compaction never falls under the hook's 25% fallback because of them. `stats.railTier` reports the tier.
+   Untouched messages are returned as the same objects, and no result is ever left without its call.
 
 Jev failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.

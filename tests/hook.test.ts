@@ -78,7 +78,7 @@ describe('session message mapping', () => {
     ];
     messages[1]!.toolUses[0]!.text = 'x'.repeat(2000);
     messages[2]!.toolResults![0]!.text = 'x'.repeat(2000);
-    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300));
+    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300, false));
     expect(out).toHaveLength(messages.length);
     expect(out[0]).toBe(messages[0]);
     expect(out[1]?.handle).toBeUndefined();
@@ -103,7 +103,7 @@ describe('session message mapping', () => {
       decideCall(calls[0]!, { keepCall: 0.9, keepResult: 0.1 }, { keepThreshold: 0.5 }),
       decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.9 }, { keepThreshold: 0.5 }),
     ];
-    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300));
+    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300, false));
     expect(out[1]).toBe(messages[1]);
     expect(out[2]).toBe(messages[2]);
   });
@@ -121,7 +121,9 @@ describe('compactSession', () => {
     expect(bodies).toHaveLength(1);
     expect(JSON.parse(bodies[0]!).model).toBe('jev-x');
     expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
-    expect(messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
+    // The dropped call t1 stays as a rebuilt fact stub (no handle) instead of disappearing.
+    expect(messages.map((m) => m.handle)).toEqual(['h-0', undefined, undefined, 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
+    expect(messages[2]?.toolResults?.[0]?.text).toMatch(/fast-jev-compaction omitted \d+ chars/);
     expect(summarize(output)).toMatch(/^\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens \(full\) in 1 request\(s\)$/);
     expect(decisionLog(output)).toBe('t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=0.90/result=0.90');
     expect(decisionLogLines(output)).toEqual([`decisions: ${decisionLog(output)}`]);
