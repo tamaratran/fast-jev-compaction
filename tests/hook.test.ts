@@ -6,6 +6,7 @@ import {
   resolveHookConfig,
   summarize,
   toSessionMessages,
+  withCompactionDeadline,
 } from '../hooks/fast-jev.ts';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
 
@@ -53,7 +54,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest', compactionTimeoutMs: 15000 });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -64,7 +65,45 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      compactionTimeoutMs: 15000,
     });
+  });
+});
+
+describe('compaction deadline', () => {
+  it('accepts a positive timeout and defaults invalid values', () => {
+    expect(resolveHookConfig({ compactionTimeoutMs: 2500 }).compactionTimeoutMs).toBe(2500);
+    for (const value of [0, -1, NaN, Infinity, '15000']) {
+      expect(resolveHookConfig({ compactionTimeoutMs: value }).compactionTimeoutMs).toBe(15000);
+    }
+  });
+
+  it('cancels the timer when work succeeds or throws', async () => {
+    for (const fails of [false, true]) {
+      let timerSignal: AbortSignal | undefined;
+      const pending = withCompactionDeadline(async () => {
+        if (fails) throw new Error('request failed');
+        return 'done';
+      }, 1234, (ms, { signal }) => {
+        expect(ms).toBe(1234);
+        timerSignal = signal;
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled'))));
+      });
+      if (fails) await expect(pending).rejects.toThrow('request failed');
+      else await expect(pending).resolves.toBe('done');
+      expect(timerSignal?.aborted).toBe(true);
+    }
+  });
+
+  it('settles at the deadline even if work is still pending and rejects later', async () => {
+    let expire!: () => void;
+    let rejectWork!: (error: Error) => void;
+    const work = new Promise<never>((_resolve, reject) => { rejectWork = reject; });
+    const pending = withCompactionDeadline(() => work, 1234, () => new Promise((resolve) => { expire = resolve; }));
+    const assertion = expect(pending).rejects.toThrow('Jev compaction timed out after 1234ms');
+    expire();
+    await assertion;
+    rejectWork(new Error('late request failure'));
   });
 });
 

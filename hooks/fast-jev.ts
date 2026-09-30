@@ -23,6 +23,7 @@ const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  compactionTimeoutMs: 15_000,
 };
 
 export type HookFetchInit = {
@@ -45,6 +46,7 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  compactionTimeoutMs: number;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -79,7 +81,9 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    compactionTimeoutMs: optionNumber(options, 'compactionTimeoutMs', HOOK_DEFAULTS.compactionTimeoutMs),
   };
+  if (config.compactionTimeoutMs <= 0) config.compactionTimeoutMs = HOOK_DEFAULTS.compactionTimeoutMs;
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
@@ -170,6 +174,31 @@ export async function compactSession(
   if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
   const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
   return { result, messages: toSessionMessages(messages, result.messages) };
+}
+
+class CompactionTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Jev compaction timed out after ${timeoutMs}ms`);
+  }
+}
+
+/** Bound the entire Jev round, including all batches, using the host's clock. */
+export async function withCompactionDeadline<T>(
+  work: () => Promise<T>,
+  timeoutMs: number,
+  sleep: (ms: number, options: { signal: AbortSignal }) => Promise<void>,
+): Promise<T> {
+  const timer = new AbortController();
+  const deadline = sleep(timeoutMs, { signal: timer.signal }).then(() => {
+    throw new CompactionTimeoutError(timeoutMs);
+  });
+  try {
+    // Race observes late rejections too. A late response cannot install a
+    // second compaction after the deadline has already settled this round.
+    return await Promise.race([Promise.resolve().then(work), deadline]);
+  } finally {
+    timer.abort();
+  }
 }
 
 function percent(ratio: number): string {
@@ -263,10 +292,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
-        return { status: response.status, ok: response.ok, text: response.text };
-      });
+      const { result, messages } = await withCompactionDeadline(
+        () => compactSession(event.messages, config, async (url, init) => {
+          const response = await $.http.fetch(url, init);
+          return { status: response.status, ok: response.ok, text: response.text };
+        }),
+        config.compactionTimeoutMs,
+        (ms, options) => $.clock.sleep(ms, options),
+      );
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
@@ -281,6 +314,9 @@ export const register: Register = (on: On, options: PluginOptions) => {
       );
       return { messages };
     } catch (error) {
+      if (error instanceof CompactionTimeoutError && event.trigger === 'plugin') {
+        return { skip: `fast-jev-compaction: ${error.message}; conversation left unchanged` };
+      }
       notify(
         $,
         `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,

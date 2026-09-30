@@ -22,6 +22,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit && npm run typecheck:hooks",
     "test": "vitest run",
+    "test:hooks:host": "node scripts/test-host-hooks.mjs",
     "demo": "tsx examples/demo.ts",
     "typecheck:hooks": "tsc -p tsconfig.hooks.json",
     "validate:plugin": "claude plugin validate .claude-plugin/plugin.json"

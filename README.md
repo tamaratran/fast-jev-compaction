@@ -168,6 +168,7 @@ just the repo's `.claude-plugin/marketplace.json`.
 npm install
 npm run typecheck        # library + hook
 npm test
+npm run test:hooks:host  # native hook dispatcher tests; requires Claude Code
 npm run build
 npm run validate:plugin  # claude plugin validate
 TYPESAFE_API_KEY="$(cat ~/.typesafe_key)" npm run demo
