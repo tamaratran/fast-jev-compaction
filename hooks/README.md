@@ -74,7 +74,10 @@ window and is accepted at `compactAtPercent − 5`; the part of the context outs
 the transcript (system prompt, tools) is subtracted, since it does not shrink.
 `minReductionRatio` applies only when the usage figures are unavailable. The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call
-`decisions:` line with both probabilities is logged for diagnosis. The
+`decisions:` line with both probabilities is logged for diagnosis. If the
+built-in summary it fell back to then fails (an error, or an interrupt aborting
+it: on a 1M window it takes minutes), the hook installs its own compaction
+instead when that freed anything, so the session never stays over the limit. The
 `turn.complete` hook requests
 compaction when `context.percent` reaches `compactAtPercent`, with an
 in-flight guard.

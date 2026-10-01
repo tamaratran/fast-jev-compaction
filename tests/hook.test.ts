@@ -6,6 +6,7 @@ import {
   expireOutputs,
   saveForSummary,
   pressure,
+  register,
   decisionLog,
   decisionLogLines,
   resolveHookConfig,
@@ -314,5 +315,58 @@ describe('saved outputs: secrets, age and paths', () => {
     expect(await expireOutputs('R', fs, now)).toBe(1);
     expect(files.get('R/s-old/a.txt')!.text).toBe('');
     expect(files.get('R/s-new/b.txt')!.text).toBe('new output');
+  });
+});
+
+describe('session.compact when the built-in summary fails', () => {
+  beforeEach(() => forgetAnswers());
+
+  type Handler = (...args: unknown[]) => Promise<unknown>;
+
+  // A full 1M window: the gate asks for more than the hook reaches, so it falls back to the summary.
+  function host() {
+    const logs: string[] = [];
+    const $ = {
+      settings: { read: async () => ({}) },
+      env: { get: async () => undefined },
+      ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+      session: { usage: async () => ({ context: { tokens: 990_000, window: 1_000_000, percent: 99 } }) },
+      // t1 (the Read) dropped, t2 kept: a real reduction, far below a full window's gate
+      http: { fetch: jevFetch((name) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1)) },
+    };
+    return { $, logs };
+  }
+
+  function hook(options: Record<string, unknown> = {}) {
+    const handlers = new Map<string, Handler>();
+    register(((name: string, handler: Handler) => handlers.set(name, handler)) as never, {
+      apiKey: 'k',
+      preserveRecentMessages: 1,
+      saveFullOutputs: false,
+      ...options,
+    } as never);
+    return handlers.get('session.compact')!;
+  }
+
+  const failing = async () => {
+    throw new Error('reactive compaction did not settle ok');
+  };
+
+  it('installs its own compaction instead of leaving the session over the limit', async () => {
+    const { $, logs } = host();
+    const answer = (await hook()($, { trigger: 'auto', messages: transcript() }, failing)) as {
+      messages: SessionMessage[];
+    };
+    expect(logs.some((line) => line.startsWith('fallback to built-in summary (below the 90%'))).toBe(true);
+    expect(answer.messages.map((m) => m.handle)).toEqual(['h-0', undefined, undefined, 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
+    expect(logs.at(-1)).toMatch(/^kept 7\/7 messages after the built-in summary failed \(reactive compaction did not settle ok\)/);
+  });
+
+  it('passes the failure on when it reduced nothing', async () => {
+    const { $ } = host();
+    // everything pinned: nothing dropped, so nothing of its own to install
+    await expect(hook({ preserveRecentMessages: 50 })($, { trigger: 'auto', messages: transcript() }, failing)).rejects.toThrow(
+      'reactive compaction did not settle ok',
+    );
   });
 });

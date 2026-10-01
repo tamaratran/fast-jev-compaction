@@ -476,12 +476,24 @@ export const register: Register = (on: On, options: PluginOptions) => {
   let compacting = false;
 
   on('session.compact', async ($, event, next) => {
+    // The hook's own compaction when it fell short of the gate: installed if the built-in summary then fails, so a
+    // summary that errors or is aborted by an interrupt never leaves the session over the limit.
+    let own: SessionMessage[] | undefined;
     // A fallback still keeps every output: saved to files, and the summarizer is told where they are.
     const fallback = async (reason: string) => {
       notify($, `fallback to built-in summary (${reason})`);
       const target = configured.saveFullOutputs ? await offloadTarget($) : undefined;
       const note = target ? await saveForSummary(event.messages, target.dir, target.fs) : undefined;
-      return next(note ? { ...event, instructions: [event.instructions, note].filter(Boolean).join('\n\n') } : event);
+      try {
+        return await next(note ? { ...event, instructions: [event.instructions, note].filter(Boolean).join('\n\n') } : event);
+      } catch (error) {
+        if (!own) throw error;
+        notify(
+          $,
+          `kept ${own.length}/${event.messages.length} messages after the built-in summary failed (${error instanceof Error ? error.message : String(error)})`,
+        );
+        return { messages: own };
+      }
     };
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
@@ -502,6 +514,8 @@ export const register: Register = (on: On, options: PluginOptions) => {
       );
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < needed.gate) {
+        if (reductionRatio(result) > 0) own = messages;
+        // `return` without `await`: a failing fallback must not land in the catch below and run the summary twice.
         return fallback(`below the ${percent(needed.gate)} this window needs: ${summarize(result)}`);
       }
       notify(
