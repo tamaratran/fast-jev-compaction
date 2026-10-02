@@ -259,6 +259,9 @@ function notify(
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  // Headless (-p / SDK, so the desktop app too) rejects $.session.compact on every
+  // call; after the first rejection the host's own auto-compact is the only trigger.
+  let headless = false;
 
   on('session.compact', async ($, event, next) => {
     try {
@@ -290,15 +293,19 @@ export const register: Register = (on: On, options: PluginOptions) => {
   });
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
-    if (compacting) return next(event);
+    if (compacting || headless) return next(event);
     try {
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
       compacting = true;
       await $.session.compact();
     } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      if (text.includes('headless')) headless = true;
       $.ui.log(
-        `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,
+        headless
+          ? `auto-compact off for this session (${text})`
+          : `auto-compact skipped (${text})`,
       );
     } finally {
       compacting = false;
