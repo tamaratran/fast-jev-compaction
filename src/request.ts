@@ -1,7 +1,35 @@
 import type { JevAnswer, JevQuestions, JevResponse, JevState } from './types.js';
 
 export const SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';
+export const OPENROUTER_SYSTEM_ONE_URL = 'https://openrouter.ai/api/v1/systemone';
 export const DEFAULT_MODEL = 'jev-latest';
+
+const ENDPOINT_PATHS = ['/v1/systemone', '/alpha/decisions'];
+
+/**
+ * Picks the System One endpoint from optional overrides; `undefined` means
+ * the default TypeSafe endpoint.
+ *
+ * - `jevBaseUrl` (`JEV_BASE_URL`) is a full endpoint URL and is used as is.
+ * - `typesafeBaseUrl` (`TYPESAFE_BASE_URL`) is an API base, as the TypeSafe
+ *   SDKs take it; `/v1/systemone` is appended unless the URL already ends in
+ *   an endpoint path.
+ * - Otherwise an OpenRouter key (`sk-or-`) selects the OpenRouter endpoint.
+ */
+export function resolveSystemOneUrl(params: {
+  jevBaseUrl?: string;
+  typesafeBaseUrl?: string;
+  apiKey?: string;
+}): string | undefined {
+  const jev = params.jevBaseUrl?.trim();
+  if (jev) return jev;
+  const base = params.typesafeBaseUrl?.trim().replace(/\/+$/, '');
+  if (base) {
+    return ENDPOINT_PATHS.some((path) => base.endsWith(path)) ? base : `${base}/v1/systemone`;
+  }
+  if (params.apiKey?.startsWith('sk-or-')) return OPENROUTER_SYSTEM_ONE_URL;
+  return undefined;
+}
 
 export interface JevRequest {
   url: string;

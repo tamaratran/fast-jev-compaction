@@ -9,7 +9,12 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
-import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import {
+  buildJevRequest,
+  DEFAULT_MODEL,
+  parseJevResponse,
+  resolveSystemOneUrl,
+} from '../src/request.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -42,6 +47,7 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  baseUrl?: string;
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
@@ -88,10 +94,15 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  baseUrl?: string,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -168,7 +179,11 @@ export async function compactSession(
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
   if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, config.apiKey, config.model, config.baseUrl),
+    config,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -224,23 +239,49 @@ export function decisionLogLines(
   );
 }
 
-async function getApiKey(
-  $: {
-    env: { get: (name: string) => Promise<string | undefined> };
-    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
-  },
-  config: HookConfig,
-): Promise<string | undefined> {
-  if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
-  if (fromEnv) return fromEnv;
+type HookEnv = {
+  env: { get: (name: string) => Promise<string | undefined> };
+  settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
+};
+
+async function settingsEnv($: HookEnv): Promise<Record<string, unknown>> {
   const settings = await $.settings.read();
   const env = settings['env'];
-  if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
-    if (typeof value === 'string' && value) return value;
-  }
-  return undefined;
+  return env && typeof env === 'object' ? (env as Record<string, unknown>) : {};
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+/**
+ * The key and endpoint for this compaction. Each variable is read from the
+ * process environment first, then from the settings `env` block. `$.env.get`
+ * takes string literals only, so every name is spelled out.
+ */
+export async function getConnection(
+  $: HookEnv,
+  config: HookConfig,
+): Promise<{ apiKey?: string; baseUrl?: string }> {
+  const env = await settingsEnv($);
+  // `||`, not `??`: an empty variable falls through to the next source.
+  const apiKey =
+    config.apiKey ||
+    (await $.env.get('TYPESAFE_API_KEY')) ||
+    stringValue(env['TYPESAFE_API_KEY']) ||
+    (await $.env.get('OPENROUTER_API_KEY')) ||
+    stringValue(env['OPENROUTER_API_KEY']) ||
+    undefined;
+  const baseUrl = resolveSystemOneUrl({
+    jevBaseUrl: (await $.env.get('JEV_BASE_URL')) || stringValue(env['JEV_BASE_URL']),
+    typesafeBaseUrl:
+      (await $.env.get('TYPESAFE_BASE_URL')) || stringValue(env['TYPESAFE_BASE_URL']),
+    apiKey,
+  });
+  const connection: { apiKey?: string; baseUrl?: string } = {};
+  if (apiKey) connection.apiKey = apiKey;
+  if (baseUrl) connection.baseUrl = baseUrl;
+  return connection;
 }
 
 function notify(
@@ -262,7 +303,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const config = { ...configured, ...(await getConnection($, configured)) };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };

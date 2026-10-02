@@ -58,8 +58,21 @@ The plugin declares these `userConfig` values in
 | `model` | `jev-latest` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
-through `TYPESAFE_API_KEY`. The environment variable is the recommended
-development setup.
+through `TYPESAFE_API_KEY` (or `OPENROUTER_API_KEY`). The environment variable
+is the recommended development setup. Each variable is read from the process
+environment first, then from the `env` block of the Claude Code settings.
+
+The endpoint defaults to `https://api.typesafe.ai/v1/systemone`. These
+variables change it:
+
+| Variable | Effect |
+| --- | --- |
+| `JEV_BASE_URL` | Full endpoint URL, used as is. |
+| `TYPESAFE_BASE_URL` | API base, as the TypeSafe SDKs take it. `/v1/systemone` is appended unless the URL already ends in `/v1/systemone` or `/alpha/decisions`. |
+| (none, key starts with `sk-or-`) | `https://openrouter.ai/api/v1/systemone` |
+
+For example, an OpenRouter key works with no further setting, and
+`TYPESAFE_BASE_URL=https://openrouter.ai/api` gives the same endpoint.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
