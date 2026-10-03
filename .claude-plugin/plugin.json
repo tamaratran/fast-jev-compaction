@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -52,11 +52,29 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "maxBatches": {
+      "type": "number",
+      "title": "Maximum Jev requests per compaction",
+      "description": "Every batch resends the full conversation state (Jev's endpoint is stateless), so batch count multiplies request cost. A compaction needing more than this many batches aborts before any request is sent and falls back to the built-in summary instead.",
+      "default": 3
+    },
     "model": {
       "type": "string",
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "depthClassification": {
+      "type": "boolean",
+      "title": "Depth classification",
+      "description": "Score the session before compacting; route deep sessions (many files/edits/errors, or a goal matching deep-work keywords) to the built-in summary instead of Jev.",
+      "default": true
+    },
+    "depthThreshold": {
+      "type": "number",
+      "title": "Depth threshold",
+      "description": "Minimum depth score (0-1) that routes a session to the built-in summary instead of Jev.",
+      "default": 0.5
     }
   }
 }

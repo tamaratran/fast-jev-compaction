@@ -379,6 +379,29 @@ describe('compact', () => {
     expect(reductionRatio(output)).toBe(0);
   });
 
+  it('aborts before any request when more than maxBatches would be needed', async () => {
+    const seen: Seen[] = [];
+    const messages = transcript();
+    const stateTokens = fitState(messages, collectToolCalls(messages, 1), {
+      ...fit,
+      goal: '',
+      preserveRecentMessages: 1,
+    }).tokens;
+    await expect(
+      compact(messages, fakeJev((name) => (name.startsWith('call_') ? 0.9 : 0.1), seen), {
+        preserveRecentMessages: 1,
+        maxRequestTokens: stateTokens + 150,
+        maxBatches: 1,
+      }),
+    ).rejects.toThrow(/too many Jev requests/);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('defaults maxBatches to 3 without changing normal behaviour', () => {
+    expect(resolveOptions()).toMatchObject({ maxBatches: 3 });
+    expect(resolveOptions({ maxBatches: 0 })).toMatchObject({ maxBatches: 1 });
+  });
+
   it('rejects malformed answers', async () => {
     const broken: JevAsker = {
       ask: async () => ({ answers: { call_t1: { noul: 0.5 } } }),

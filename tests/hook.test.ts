@@ -1,13 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifySessionDepth,
   compactSession,
   decisionLog,
   decisionLogLines,
+  depthLogLine,
+  providerFor,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
-import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
+import {
+  applyDecisions,
+  collectToolCalls,
+  decideCall,
+  isOpenRouterKey,
+  OPENROUTER_DECISIONS_URL,
+  OPENROUTER_JEV_MODEL,
+  type Message,
+} from '../src/index.js';
 
 type SessionMessage = Message & { handle?: string };
 
@@ -40,8 +52,9 @@ function transcript(): SessionMessage[] {
   ];
 }
 
-function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
-  return async (_url: string, init?: { body?: string }) => {
+function jevFetch(answer: (name: string) => number, bodies: string[] = [], urls: string[] = []) {
+  return async (url: string, init?: { body?: string }) => {
+    urls.push(url);
     bodies.push(init?.body ?? '');
     const { questions } = JSON.parse(init?.body ?? '{}') as { questions: Record<string, unknown> };
     const answers = Object.fromEntries(
@@ -53,9 +66,24 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+      depthClassification: true,
+      depthThreshold: 0.5,
+    });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({
+        apiKey: 'k',
+        keepThreshold: 0.3,
+        maxStateTokens: 1000,
+        model: 'jev-x',
+        goal: 'g',
+        compactAtPercent: 'no',
+        depthClassification: false,
+        depthThreshold: 0.8,
+      }),
     ).toEqual({
       apiKey: 'k',
       keepThreshold: 0.3,
@@ -64,6 +92,8 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      depthClassification: false,
+      depthThreshold: 0.8,
     });
   });
 });
@@ -141,9 +171,164 @@ describe('compactSession', () => {
 
   it('throws on a missing key and on failed requests so the hook falls back', async () => {
     const config = resolveHookConfig({ preserveRecentMessages: 1 });
-    await expect(compactSession(transcript(), config, jevFetch(() => 0))).rejects.toThrow(/TYPESAFE_API_KEY/);
+    await expect(compactSession(transcript(), config, jevFetch(() => 0))).rejects.toThrow(
+      /TYPESAFE_API_KEY|OPENROUTER_API_KEY/,
+    );
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+
+  it('routes an OpenRouter key to the decisions endpoint with the Jev model', async () => {
+    const bodies: string[] = [];
+    const urls: string[] = [];
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'sk-or-v1-test' };
+    await compactSession(transcript(), config, jevFetch(() => 0.1, bodies, urls));
+    expect(urls[0]).toBe(OPENROUTER_DECISIONS_URL);
+    expect(JSON.parse(bodies[0]!).model).toBe(OPENROUTER_JEV_MODEL);
+  });
+});
+
+function deepTranscript(): SessionMessage[] {
+  const messages: SessionMessage[] = [
+    message('user', 'Refactor the auth module and fix the root cause of the migration bug.', {
+      handle: 'h-0',
+    }),
+  ];
+  const files = ['src/auth.ts', 'src/session.ts', 'src/db.ts', 'src/migrate.ts'];
+  files.forEach((file, i) => {
+    const id = `edit-${i}`;
+    messages.push(call(id, 'Edit', { file_path: file, old_string: 'a', new_string: 'b' }, 'ok'));
+    messages.push(result(id, i % 2 === 0 ? 'error: type mismatch' : 'ok', i % 2 === 0));
+  });
+  messages.push(message('assistant', 'Working through it.', { handle: 'h-last' }));
+  return messages;
+}
+
+describe('depth classification', () => {
+  it('classifies a short read-and-fix session as quick', () => {
+    const config = resolveHookConfig({});
+    const depth = classifySessionDepth(transcript(), config);
+    expect(depth.depth).toBe('quick');
+    expect(depth.score).toBeLessThan(config.depthThreshold);
+    expect(depthLogLine(depth)).toMatch(/^depth: quick \(score/);
+  });
+
+  it('classifies a multi-file, error-heavy refactor as deep', () => {
+    const config = resolveHookConfig({});
+    const depth = classifySessionDepth(deepTranscript(), config);
+    expect(depth.depth).toBe('deep');
+    expect(depth.score).toBeGreaterThanOrEqual(config.depthThreshold);
+    expect(depth.reasons.join(' ')).toMatch(/files touched/);
+    expect(depth.reasons.join(' ')).toMatch(/edit\/write calls/);
+    expect(depth.reasons.join(' ')).toMatch(/deep-work keyword/);
+  });
+
+  it('respects a lower or higher depthThreshold', () => {
+    const messages = deepTranscript();
+    expect(classifySessionDepth(messages, resolveHookConfig({ depthThreshold: 0.99 })).depth).toBe(
+      'quick',
+    );
+    expect(classifySessionDepth(messages, resolveHookConfig({ depthThreshold: 0.05 })).depth).toBe(
+      'deep',
+    );
+  });
+});
+
+function fakeEngine(fetchFn: (url: string, init?: { body?: string }) => Promise<{ status: number; ok: boolean; text: string }>) {
+  const logs: string[] = [];
+  const toasts: string[] = [];
+  return {
+    logs,
+    toasts,
+    $: {
+      env: { get: async (name: string) => (name === 'OPENROUTER_API_KEY' ? 'sk-or-v1-test' : undefined) },
+      settings: { read: async () => ({}) },
+      http: { fetch: async (url: string, init?: { body?: string }) => {
+        const r = await fetchFn(url, init);
+        return { status: r.status, ok: r.ok, text: r.text };
+      } },
+      ui: {
+        log: (text: string) => logs.push(text),
+        toast: (text: string) => toasts.push(text),
+      },
+    },
+  };
+}
+
+describe('register session.compact routing', () => {
+  it('skips Jev and calls next() for a deep session', async () => {
+    let handler: ((...args: unknown[]) => unknown) | undefined;
+    register(
+      (event, hook) => {
+        if (event === 'session.compact') handler = hook as typeof handler & object;
+      },
+      {},
+    );
+    const engine = fakeEngine(jevFetch(() => 1));
+    let nextCalled = false;
+    const next = (event: unknown) => {
+      nextCalled = true;
+      return event;
+    };
+    const outcome = await (handler as (
+      $: unknown,
+      event: { messages: SessionMessage[] },
+      next: typeof next,
+    ) => Promise<unknown>)(engine.$, { messages: deepTranscript() }, next);
+    expect(nextCalled).toBe(true);
+    expect(outcome).toEqual({ messages: deepTranscript() });
+    expect(engine.logs.some((line) => line.startsWith('depth: deep'))).toBe(true);
+    expect(engine.toasts.some((line) => line.includes('routed to built-in summary'))).toBe(true);
+  });
+
+  it('runs Jev as usual for a quick session', async () => {
+    let handler: ((...args: unknown[]) => unknown) | undefined;
+    register(
+      (event, hook) => {
+        if (event === 'session.compact') handler = hook as typeof handler & object;
+      },
+      { preserveRecentMessages: 1 },
+    );
+    const engine = fakeEngine(jevFetch((name) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1)));
+    const next = () => {
+      throw new Error('next() should not be called for a quick session');
+    };
+    const outcome = (await (handler as (
+      $: unknown,
+      event: { messages: SessionMessage[] },
+      next: typeof next,
+    ) => Promise<{ messages: SessionMessage[] }>)(engine.$, { messages: transcript() }, next)) as {
+      messages: SessionMessage[];
+    };
+    expect(outcome.messages.length).toBeGreaterThan(0);
+    expect(engine.logs.some((line) => line.startsWith('depth: quick'))).toBe(true);
+  });
+});
+
+describe('provider routing', () => {
+  it('detects OpenRouter keys', () => {
+    expect(isOpenRouterKey('sk-or-v1-abc')).toBe(true);
+    expect(isOpenRouterKey('ts-live-abc')).toBe(false);
+    expect(isOpenRouterKey('')).toBe(false);
+    expect(isOpenRouterKey(undefined)).toBe(false);
+  });
+
+  it('maps an OpenRouter key to the decisions endpoint and default Jev model', () => {
+    expect(providerFor('sk-or-v1-abc', 'jev-latest')).toEqual({
+      baseUrl: OPENROUTER_DECISIONS_URL,
+      model: OPENROUTER_JEV_MODEL,
+    });
+  });
+
+  it('keeps an explicit model override for an OpenRouter key', () => {
+    expect(providerFor('sk-or-v1-abc', 'typesafe/jev-1.13-20260917')).toEqual({
+      baseUrl: OPENROUTER_DECISIONS_URL,
+      model: 'typesafe/jev-1.13-20260917',
+    });
+  });
+
+  it('leaves a TypeSafe key on the default System One endpoint', () => {
+    expect(providerFor('ts-live-abc', 'jev-latest')).toEqual({ baseUrl: undefined, model: 'jev-latest' });
   });
 });

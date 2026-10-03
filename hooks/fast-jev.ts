@@ -9,7 +9,14 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
+import { classifyDepth, type DepthResult } from '../src/depth.js';
+import { goalFromMessages } from '../src/state.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import {
+  isOpenRouterKey,
+  OPENROUTER_DECISIONS_URL,
+  OPENROUTER_JEV_MODEL,
+} from '../src/openrouter.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -23,6 +30,8 @@ const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  depthClassification: true,
+  depthThreshold: 0.5,
 };
 
 export type HookFetchInit = {
@@ -45,11 +54,18 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  depthClassification: boolean;
+  depthThreshold: number;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
   const value = options[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function optionBoolean(options: PluginOptions, key: string, fallback: boolean): boolean {
+  const value = options[key];
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function optionString(options: PluginOptions, key: string): string | undefined {
@@ -66,6 +82,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
+    'maxBatches',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
@@ -79,6 +96,12 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    depthClassification: optionBoolean(
+      options,
+      'depthClassification',
+      HOOK_DEFAULTS.depthClassification,
+    ),
+    depthThreshold: optionNumber(options, 'depthThreshold', HOOK_DEFAULTS.depthThreshold),
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -87,11 +110,36 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   return config;
 }
 
+/**
+ * Classifies whether this session's compaction is safe for Jev's default
+ * aggressive scoring (`quick`) or risks losing a tool call/result that a
+ * complex, multi-file, error-heavy session (`deep`) needs verbatim later.
+ * Deterministic, no network call: the goal is to route around Jev before it
+ * runs, not to add another thing that can fail and need its own fallback.
+ */
+export function classifySessionDepth(
+  messages: readonly SessionMessage[],
+  config: HookConfig,
+): DepthResult {
+  const goal = config.goal || goalFromMessages(messages);
+  return classifyDepth(messages, goal, config.depthThreshold);
+}
+
+export function depthLogLine(result: DepthResult): string {
+  const reasons = result.reasons.length > 0 ? result.reasons.join(', ') : 'no deep-work signals';
+  return `depth: ${result.depth} (score ${result.score.toFixed(2)} vs threshold ${result.threshold}; ${reasons})`;
+}
+
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  baseUrl?: string,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -100,6 +148,24 @@ export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): Jev
       return parseJevResponse(response.status, response.ok, response.text);
     },
   };
+}
+
+/**
+ * Picks the endpoint and model for a key. An OpenRouter key (`sk-or-...`) reaches
+ * real Jev through OpenRouter's decisions endpoint; a TypeSafe key uses System One
+ * directly. An explicit `typesafe/...` model override is kept for OpenRouter.
+ */
+export function providerFor(
+  apiKey: string,
+  model: string,
+): { baseUrl: string | undefined; model: string } {
+  if (isOpenRouterKey(apiKey)) {
+    return {
+      baseUrl: OPENROUTER_DECISIONS_URL,
+      model: model === DEFAULT_MODEL ? OPENROUTER_JEV_MODEL : model,
+    };
+  }
+  return { baseUrl: undefined, model };
 }
 
 function toolUseSummary(tool: ToolUse): ToolUseSummary {
@@ -167,8 +233,13 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  if (!config.apiKey) throw new Error('no API key (set TYPESAFE_API_KEY or OPENROUTER_API_KEY)');
+  const { baseUrl, model } = providerFor(config.apiKey, config.model);
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, config.apiKey, model, baseUrl),
+    config,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -232,13 +303,19 @@ async function getApiKey(
   config: HookConfig,
 ): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
-  if (fromEnv) return fromEnv;
+  // $.env.get requires a string literal per call, so each variable is its own
+  // call; `claude plugin validate` reads these off the source statically.
+  const typeSafeEnv = await $.env.get('TYPESAFE_API_KEY');
+  if (typeSafeEnv) return typeSafeEnv;
+  const openRouterEnv = await $.env.get('OPENROUTER_API_KEY');
+  if (openRouterEnv) return openRouterEnv;
   const settings = await $.settings.read();
   const env = settings['env'];
   if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
-    if (typeof value === 'string' && value) return value;
+    for (const name of ['TYPESAFE_API_KEY', 'OPENROUTER_API_KEY']) {
+      const value = (env as Record<string, unknown>)[name];
+      if (typeof value === 'string' && value) return value;
+    }
   }
   return undefined;
 }
@@ -263,6 +340,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
+      if (config.depthClassification) {
+        const depth = classifySessionDepth(event.messages, config);
+        $.ui.log(depthLogLine(depth));
+        if (depth.depth === 'deep') {
+          notify($, `routed to built-in summary (${depthLogLine(depth)})`);
+          return next(event);
+        }
+      }
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };

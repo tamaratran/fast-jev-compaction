@@ -105,6 +105,12 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Batches beyond this abort the compaction before any Jev request is made
+   * (the caller falls back to the built-in summary) instead of resending the
+   * full state once per batch. Caps worst-case spend per compaction. Default 3.
+   */
+  maxBatches?: number;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +120,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  maxBatches: number;
 }
 
 export interface CompactResult {

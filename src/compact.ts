@@ -21,6 +21,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  maxBatches: 3,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -48,6 +49,10 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     truncateHeadChars: Math.max(
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
+    ),
+    maxBatches: Math.max(
+      1,
+      Math.floor(finite(options.maxBatches, DEFAULT_OPTIONS.maxBatches)),
     ),
   };
 }
@@ -272,6 +277,16 @@ export async function compact(
     const state = fitState(messages, calls, resolved);
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
+    if (batches.length > resolved.maxBatches) {
+      // Every batch resends the full state (Jev's decisions endpoint is
+      // stateless), so batch count multiplies cost directly. Bail out before
+      // making any request rather than letting a tool-call-heavy session
+      // fire `maxBatches`-worth of full-state requests one after another.
+      throw new Error(
+        `too many Jev requests needed (${batches.length} batches > ${resolved.maxBatches} max; ` +
+          `${candidates.length} candidate calls, ~${state.tokens} state tokens)`,
+      );
+    }
     const answered = await Promise.all(
       batches.map((batch) => askBatch(asker, state.state, batch)),
     );

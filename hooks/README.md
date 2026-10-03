@@ -55,24 +55,48 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
+| `maxBatches` | `3` |
 | `model` | `jev-latest` |
+| `depthClassification` | `true` |
+| `depthThreshold` | `0.5` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
-the response is malformed, the key is unavailable, the history cannot be
-fitted into the state budget, or the estimated reduction is below
-`minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
-built-in compaction. The outcome is shown as a toast and logged with the
-reduction, per-reason counts, state size and request count; a per-call
-`decisions:` line with both probabilities is logged for diagnosis. The
-`turn.complete` hook requests
-compaction when `context.percent` reaches `compactAtPercent`, with an
-in-flight guard.
+Every option except `apiKey`, `compactAtPercent`, `minReductionRatio`, `model`,
+`depthClassification` and `depthThreshold` is passed straight to the library;
+see the root README for what they do. The `session.compact` hook runs the Jev
+requests concurrently. If Jev fails, the response is malformed, the key is
+unavailable, the history cannot be fitted into the state budget, the session
+would need more than `maxBatches` full-state requests, or the estimated
+reduction is below `minReductionRatio`, the hook logs a fallback and
+delegates to Claude Code's built-in compaction. The outcome is shown as a
+toast and logged with the reduction, per-reason counts, state size and
+request count; a per-call `decisions:` line with both probabilities is
+logged for diagnosis. The `turn.complete` hook requests compaction when
+`context.percent` reaches `compactAtPercent`, with an in-flight guard.
+
+### Depth classification
+
+Jev's per-call scoring is a good bet for a shallow session (a question, a
+quick lookup, a small tweak): dropping a call there rarely matters again. It
+is a worse bet for a deep session — several files edited, tool errors from
+debugging, a goal that reads like "refactor", "migrate", "root cause" — where
+a wrongly dropped call or truncated result is exactly the file path or exact
+error the assistant needs three turns later. That is the "some prompts land
+flat" failure mode: not Jev scoring badly, but Jev being asked to score a
+session it should not be scoring at all.
+
+Before compaction starts, the hook runs a zero-cost, deterministic classifier
+(`classifyDepth` in `src/depth.ts`) over the transcript: distinct files
+touched, `Edit`/`Write`/`MultiEdit`/`NotebookEdit` call count, tool error
+count, total tool calls, and a keyword scan of the goal. Each contributes a
+weighted 0-1 score; at or above `depthThreshold` the session is `deep` and
+the hook skips Jev entirely, logging `depth: deep (...)` and delegating to
+`next(event)` (Claude Code's built-in summary) exactly like any other
+fallback. Below threshold it is `quick` and proceeds through Jev as before.
+Set `depthClassification` to `false` to always go through Jev.
 
 ## Scope and caveat
 
