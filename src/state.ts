@@ -37,14 +37,46 @@ export function estimateTokens(text: string): number {
   return Math.ceil(tokens);
 }
 
+const HIGH_SURROGATE_MIN = 0xd800;
+const HIGH_SURROGATE_MAX = 0xdbff;
+const LOW_SURROGATE_MIN = 0xdc00;
+const LOW_SURROGATE_MAX = 0xdfff;
+
+function isHighSurrogate(code: number): boolean {
+  return code >= HIGH_SURROGATE_MIN && code <= HIGH_SURROGATE_MAX;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= LOW_SURROGATE_MIN && code <= LOW_SURROGATE_MAX;
+}
+
+/**
+ * `slice` on UTF-16 code-unit indexes, adjusted so a cut never lands inside a
+ * surrogate pair (see #128): a head cut that would orphan a high surrogate
+ * steps back one unit, and a tail cut that would start on a low surrogate
+ * steps back one unit so the pair stays whole. A lone surrogate left in the
+ * state is escaped as `\udXXX` by `JSON.stringify`, which the API rejects
+ * with "Request contains invalid Unicode text".
+ */
+export function sliceSurrogateSafe(text: string, start: number, end: number): string {
+  const len = text.length;
+  let s = start < 0 ? Math.max(len + start, 0) : Math.min(start, len);
+  let e = end < 0 ? Math.max(len + end, 0) : Math.min(end, len);
+  if (s > 0 && isLowSurrogate(text.charCodeAt(s))) s -= 1;
+  if (e > 0 && e < len && isHighSurrogate(text.charCodeAt(e - 1))) e -= 1;
+  return text.slice(s, e);
+}
+
 export function truncate(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+  return text.length <= limit
+    ? text
+    : `${sliceSurrogateSafe(text, 0, Math.max(0, limit - 1))}…`;
 }
 
 function abridge(text: string, head: number, tail: number): string {
   if (text.length <= head + tail + 40) return text;
   const omitted = text.length - head - tail;
-  return `${text.slice(0, head)}\n[… ${omitted} chars omitted …]\n${text.slice(-tail)}`;
+  return `${sliceSurrogateSafe(text, 0, head)}\n[… ${omitted} chars omitted …]\n${sliceSurrogateSafe(text, text.length - tail, text.length)}`;
 }
 
 export function isPinned(

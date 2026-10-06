@@ -13,6 +13,8 @@ import {
   parseJevResponse,
   reductionRatio,
   resolveOptions,
+  sliceSurrogateSafe,
+  truncate,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -429,5 +431,66 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('surrogate-safe cuts (#128)', () => {
+  // A lone surrogate: a high surrogate not followed by a low one, or a low
+  // surrogate not preceded by a high one (the check from the issue report).
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it('truncate steps the head cut back instead of orphaning a high surrogate', () => {
+    // '🔥' is U+1F525 = D83D DE25; a UTF-16 cut at index 2 would split it.
+    const out = truncate('a🔥b', 3);
+    expect(out).toBe('a…');
+    expect(lone.test(out)).toBe(false);
+  });
+
+  it('truncate leaves text alone when no cut is needed', () => {
+    expect(truncate('a🔥b', 4)).toBe('a🔥b');
+  });
+
+  it('sliceSurrogateSafe drops the pair on head cuts instead of orphaning it', () => {
+    const text = `${'x'.repeat(399)}🔥`;
+    const head = sliceSurrogateSafe(text, 0, 400);
+    expect(head).toBe('x'.repeat(399));
+    expect(lone.test(head)).toBe(false);
+  });
+
+  it('sliceSurrogateSafe keeps the pair whole on tail cuts', () => {
+    // A 150-char tail of this string would start on the low surrogate of 🔥.
+    const text = `${'x'.repeat(149)}🔥${'x'.repeat(149)}`;
+    const tail = sliceSurrogateSafe(text, text.length - 150, text.length);
+    expect(tail).toBe(`🔥${'x'.repeat(149)}`);
+    expect(lone.test(tail)).toBe(false);
+  });
+
+  it('abridged states serialise with no lone surrogates', () => {
+    // The head cut at 400 would split the first 🔥; the 150-char tail would
+    // start on the low surrogate of the second one.
+    const text = `${'x'.repeat(399)}🔥${'y'.repeat(449)}🔥${'y'.repeat(149)}`;
+    const fitted = fitState([message('user', text)], [], {
+      maxStateTokens: 300,
+      preserveRecentMessages: 1,
+      goal: 'g',
+    });
+    expect(fitted.stage).toBe('texts abridged');
+    const entry = fitted.state.history[0]?.text ?? '';
+    expect(entry).toContain('chars omitted');
+    expect(lone.test(JSON.stringify(fitted.state))).toBe(false);
+  });
+
+  it('buildJevRequest replaces lone-surrogate escapes instead of sending them', () => {
+    const request = buildJevRequest({ apiKey: 'k' }, { evil: '\uD83D' } as never, {
+      q: { type: 'noul', instructions: 'x' },
+    });
+    // The lone surrogate must not reach the wire as \ud83d (the API 400s on it).
+    expect(request.body).not.toMatch(/\\ud83d(?!\\ud[c-f][0-9a-f]{2})/i);
+    expect(request.body).toContain('\\ufffd');
+    // A well-formed pair still round-trips untouched.
+    const paired = buildJevRequest({ apiKey: 'k' }, { ok: '🔥' } as never, {
+      q: { type: 'noul', instructions: 'x' },
+    });
+    expect(JSON.parse(paired.body).state).toEqual({ ok: '🔥' });
   });
 });

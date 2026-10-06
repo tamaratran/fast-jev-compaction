@@ -10,6 +10,25 @@ export interface JevRequest {
   body: string;
 }
 
+/**
+ * Lone surrogates as `JSON.stringify` emits them: `\udXXX` escape sequences.
+ * A high-surrogate escape not followed by a low-surrogate escape, or a
+ * low-surrogate escape not preceded by a high-surrogate escape.
+ */
+const ESCAPED_LONE_SURROGATE =
+  /\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f][0-9a-f]{2})|(?<!\\ud[89ab][0-9a-f]{2})\\ud[c-f][0-9a-f]{2}/gi;
+
+/**
+ * Backstop for #128: `JSON.stringify` escapes any lone surrogate still in the
+ * state as a `\udXXX` sequence, which the API rejects with "Request contains
+ * invalid Unicode text". Replace those escapes with U+FFFD. The cuts in
+ * `state.ts` already avoid splitting surrogate pairs; this covers lone
+ * surrogates that arrive from anywhere else (e.g. raw tool output).
+ */
+function wellFormedJson(json: string): string {
+  return json.replace(ESCAPED_LONE_SURROGATE, '\\ufffd');
+}
+
 /** The HTTP request for one Jev call, for any fetch-like transport. */
 export function buildJevRequest(
   params: {
@@ -27,11 +46,13 @@ export function buildJevRequest(
       authorization: `Bearer ${params.apiKey}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      model: params.model ?? DEFAULT_MODEL,
-      state,
-      questions,
-    }),
+    body: wellFormedJson(
+      JSON.stringify({
+        model: params.model ?? DEFAULT_MODEL,
+        state,
+        questions,
+      }),
+    ),
   };
 }
 
