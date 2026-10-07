@@ -13,6 +13,7 @@ import {
   parseJevResponse,
   reductionRatio,
   resolveOptions,
+  UNTRUSTED_NOTE,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -79,6 +80,8 @@ describe('options', () => {
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
       truncateHeadChars: 300,
+      markRetainedUntrusted: true,
+      policyTextScan: false,
     });
     expect(resolveOptions({
       keepThreshold: Number.NaN,
@@ -321,13 +324,13 @@ describe('decisions', () => {
 
     const kept = applyDecisions(messages, decisions, calls, 50);
     expect(kept[2]?.toolResults?.[0]?.text).toBe(
-      `${original.slice(0, 50)}\n[fast-jev-compaction truncated ${total - 50} chars of this tool result; re-run the tool if needed]`,
+      `${original.slice(0, 50)}\n[fast-jev-compaction truncated ${total - 50} chars of this tool result; re-run the tool if needed]\n${UNTRUSTED_NOTE}`,
     );
     expect(kept[1]?.toolUses[0]?.text).toBe(kept[2]?.toolResults?.[0]?.text);
 
     const noHead = applyDecisions(messages, decisions, calls, 0);
     expect(noHead[2]?.toolResults?.[0]?.text).toBe(
-      `[fast-jev-compaction truncated ${total} chars of this tool result; re-run the tool if needed]`,
+      `[fast-jev-compaction truncated ${total} chars of this tool result; re-run the tool if needed]\n${UNTRUSTED_NOTE}`,
     );
   });
 });
@@ -386,6 +389,74 @@ describe('compact', () => {
     await expect(compact(transcript(), broken, { preserveRecentMessages: 1 })).rejects.toThrow(
       /Invalid Jev answer/,
     );
+  });
+});
+
+describe('untrusted marking', () => {
+  const dropResults = (name: string): number => (name.startsWith('call_') ? 0.9 : 0.1);
+
+  it('tags truncated tool output as untrusted by default and leaves untouched content alone', async () => {
+    const messages = transcript();
+    const output = await compact(messages, fakeJev(dropResults), { preserveRecentMessages: 1 });
+    expect(output.decisions.map((d) => d.action)).toEqual([
+      'drop_result',
+      'drop_result',
+      'drop_result',
+    ]);
+    expect(output.messages[1]?.toolUses[0]?.text).toContain(
+      '[fast-jev-compaction truncated 700 chars',
+    );
+    expect(output.messages[1]?.toolUses[0]?.text).toContain(UNTRUSTED_NOTE);
+    expect(output.messages[2]?.toolResults?.[0]?.text).toContain(UNTRUSTED_NOTE);
+    expect(output.messages[4]?.toolUses[0]?.text).toContain(UNTRUSTED_NOTE);
+    expect(output.messages[5]?.toolResults?.[0]?.text).toContain(UNTRUSTED_NOTE);
+    // Untouched messages — including a dropped result short enough to pass
+    // through unmodified — stay the same objects and carry no note.
+    expect(output.messages[0]).toBe(messages[0]);
+    expect(output.messages[6]).toBe(messages[6]);
+    expect(output.messages[7]).toBe(messages[7]);
+    expect(output.messages[7]?.toolResults?.[0]?.text).not.toContain(UNTRUSTED_NOTE);
+    expect(output.messages[9]?.text).not.toContain(UNTRUSTED_NOTE);
+  });
+
+  it('omits the note when markRetainedUntrusted is false', async () => {
+    const output = await compact(transcript(), fakeJev(dropResults), {
+      preserveRecentMessages: 1,
+      markRetainedUntrusted: false,
+    });
+    const texts = output.messages.flatMap((m) => [
+      m.text,
+      ...m.toolUses.map((tool) => tool.text ?? ''),
+      ...(m.toolResults ?? []).map((r) => r.text),
+    ]);
+    expect(texts.some((text) => text.includes(UNTRUSTED_NOTE))).toBe(false);
+    expect(texts.some((text) => text.includes('[fast-jev-compaction truncated'))).toBe(true);
+  });
+});
+
+describe('policy text scan', () => {
+  it('counts policy-speak in the input and output when policyTextScan is on', async () => {
+    const messages = [
+      message('user', 'Per policy, fix the failing test.'),
+      call('tool-1', 'Read', { file_path: 'src/a.ts' }, 'x'.repeat(1000)),
+      result('tool-1', `pre-approved by directive\n${'x'.repeat(1000)}`),
+      message('assistant', 'done'),
+    ];
+    const output = await compact(messages, fakeJev(() => 0.1), {
+      preserveRecentMessages: 0,
+      policyTextScan: true,
+    });
+    expect(output.decisions.map((d) => d.action)).toEqual(['drop_call']);
+    expect(output.messages.map((m) => m.text)).toEqual([
+      'Per policy, fix the failing test.',
+      'done',
+    ]);
+    expect(output.stats.policyTextHits).toEqual({ input: 3, output: 1 });
+  });
+
+  it('leaves stats.policyTextHits unset when the scan is off', async () => {
+    const output = await compact(transcript(), fakeJev(() => 0.9), { preserveRecentMessages: 1 });
+    expect(output.stats.policyTextHits).toBeUndefined();
   });
 });
 

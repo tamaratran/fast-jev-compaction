@@ -105,6 +105,10 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /** Tag retained-but-truncated tool output as untrusted data, not instructions. Default true. */
+  markRetainedUntrusted?: boolean;
+  /** Count policy/directive-style phrases in the input and output into `stats.policyTextHits`. Default false. */
+  policyTextScan?: boolean;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +118,8 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  markRetainedUntrusted: boolean;
+  policyTextScan: boolean;
 }
 
 export interface CompactResult {
@@ -135,6 +141,8 @@ export interface CompactResult {
     stateStage: string;
     requests: number;
     ms: number;
+    /** Policy/directive-style phrase hits on both sides; only when `policyTextScan` is on. */
+    policyTextHits?: { input: number; output: number };
   };
 }
 
