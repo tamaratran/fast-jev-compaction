@@ -37,14 +37,39 @@ export function estimateTokens(text: string): number {
   return Math.ceil(tokens);
 }
 
+/** Leading surrogate unit: the first half of an astral (surrogate pair) character. */
+const isHighSurrogate = (unit: number): boolean => unit >= 0xd800 && unit <= 0xdbff;
+const isLowSurrogate = (unit: number): boolean => unit >= 0xdc00 && unit <= 0xdfff;
+
+/** Backs off one UTF-16 unit when a cut would split an astral character in half. */
+function snapBack(text: string, end: number): number {
+  if (end <= 0 || end >= text.length) return end;
+  if (isHighSurrogate(text.charCodeAt(end - 1)) && isLowSurrogate(text.charCodeAt(end))) {
+    return end - 1;
+  }
+  return end;
+}
+
 export function truncate(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+  if (text.length <= limit) return text;
+  const end = snapBack(text, Math.max(0, limit - 1));
+  return `${text.slice(0, end)}…`;
 }
 
 function abridge(text: string, head: number, tail: number): string {
   if (text.length <= head + tail + 40) return text;
   const omitted = text.length - head - tail;
-  return `${text.slice(0, head)}\n[… ${omitted} chars omitted …]\n${text.slice(-tail)}`;
+  const headEnd = snapBack(text, head);
+  const tailStart = (() => {
+    const start = text.length - tail;
+    if (start <= 0 || start >= text.length) return start;
+    if (isLowSurrogate(text.charCodeAt(start)) && isHighSurrogate(text.charCodeAt(start - 1))) {
+      return start + 1;
+    }
+    return start;
+  })();
+  const dropped = text.length - (headEnd + (text.length - tailStart));
+  return `${text.slice(0, headEnd)}\n[… ${dropped} chars omitted …]\n${text.slice(tailStart)}`;
 }
 
 export function isPinned(
