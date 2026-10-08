@@ -256,6 +256,65 @@ function notify(
   $.ui.toast(text, { timeoutMs: 15_000 });
 }
 
+/** A curl config for `curl -K -`, quoted so any value passes through unchanged. */
+export function curlConfig(url: string, init?: HookFetchInit): string {
+  const quote = (value: string) =>
+    `"${value
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t')}"`;
+  const lines = [`url = ${quote(url)}`, `request = ${quote(init?.method ?? 'GET')}`];
+  for (const [name, value] of Object.entries(init?.headers ?? {})) {
+    lines.push(`header = ${quote(`${name}: ${value}`)}`);
+  }
+  if (init?.body !== undefined) lines.push(`data-raw = ${quote(init.body)}`);
+  return `${lines.join('\n')}\n`;
+}
+
+type HostIo = {
+  http: { fetch: (url: string, init?: HookFetchInit) => Promise<HookFetchResponse> };
+  process: {
+    run: (
+      argv: readonly string[],
+      options?: { stdin?: string; timeoutMs?: number },
+    ) => Promise<{ exitCode: number | null; stdout: string; stderr: string }>;
+  };
+};
+
+const UNRESOLVED_HOST = /ENOTFOUND|EAI_AGAIN|getaddrinfo/;
+
+/**
+ * `$.http.fetch`, falling back to curl when the host cannot be resolved.
+ * `$.http.fetch` does not use `HTTPS_PROXY`, so behind a proxy that is the only
+ * way out (Claude Code cloud sessions resolve outside hosts only through one).
+ * The request goes to curl as a config on stdin, keeping the key and the
+ * transcript out of argv and off disk.
+ */
+export function hostFetch($: HostIo): HookFetch {
+  let viaCurl = false;
+  return async (url, init) => {
+    if (!viaCurl) {
+      try {
+        const response = await $.http.fetch(url, init);
+        return { status: response.status, ok: response.ok, text: response.text };
+      } catch (error) {
+        if (!UNRESOLVED_HOST.test(String(error))) throw error;
+        viaCurl = true;
+      }
+    }
+    const run = await $.process.run(
+      ['curl', '-sS', '--max-time', '180', '-K', '-', '-w', '\n%{http_code}'],
+      { stdin: curlConfig(url, init), timeoutMs: 200_000 },
+    );
+    if (run.exitCode !== 0) throw new Error(`curl exit ${run.exitCode}: ${run.stderr.trim()}`);
+    const cut = run.stdout.lastIndexOf('\n');
+    const status = Number(run.stdout.slice(cut + 1));
+    return { status, ok: status >= 200 && status < 300, text: run.stdout.slice(0, cut) };
+  };
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
@@ -263,10 +322,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
-        return { status: response.status, ok: response.ok, text: response.text };
-      });
+      const { result, messages } = await compactSession(event.messages, config, hostFetch($));
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(

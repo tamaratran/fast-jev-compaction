@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   compactSession,
+  curlConfig,
   decisionLog,
   decisionLogLines,
+  hostFetch,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -145,5 +147,73 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('hostFetch', () => {
+  const init = { method: 'POST', headers: { Authorization: 'Bearer k' }, body: '{"a":"b"}' };
+
+  function host(fetchError?: Error, run = { exitCode: 0, stdout: '{"ok":true}\n200', stderr: '' }) {
+    const calls = { fetch: 0, run: [] as { argv: readonly string[]; stdin?: string }[] };
+    return {
+      calls,
+      $: {
+        http: {
+          fetch: async () => {
+            calls.fetch += 1;
+            if (fetchError) throw fetchError;
+            return { status: 201, ok: true, text: 'direct' };
+          },
+        },
+        process: {
+          run: async (argv: readonly string[], options?: { stdin?: string }) => {
+            calls.run.push({ argv, stdin: options?.stdin });
+            return run;
+          },
+        },
+      },
+    };
+  }
+
+  it('uses $.http.fetch when it works', async () => {
+    const { $, calls } = host();
+    expect(await hostFetch($)('https://x.test', init)).toEqual({ status: 201, ok: true, text: 'direct' });
+    expect(calls.run).toHaveLength(0);
+  });
+
+  it('switches to curl for good when the host cannot be resolved', async () => {
+    const { $, calls } = host(new Error('getaddrinfo ENOTFOUND x.test'));
+    const fetchFn = hostFetch($);
+    expect(await fetchFn('https://x.test', init)).toEqual({ status: 200, ok: true, text: '{"ok":true}' });
+    await fetchFn('https://x.test', init);
+    expect(calls.fetch).toBe(1);
+    expect(calls.run).toHaveLength(2);
+    expect(calls.run[0]?.argv).toContain('-K');
+    expect(calls.run[0]?.argv.join(' ')).not.toContain('Bearer');
+    expect(calls.run[0]?.stdin).toBe(curlConfig('https://x.test', init));
+  });
+
+  it('rethrows other fetch errors and reports curl failures', async () => {
+    await expect(hostFetch(host(new Error('ECONNRESET')).$)('https://x.test', init)).rejects.toThrow('ECONNRESET');
+    const failing = host(new Error('ENOTFOUND'), { exitCode: 7, stdout: '', stderr: 'no route\n' });
+    await expect(hostFetch(failing.$)('https://x.test', init)).rejects.toThrow('curl exit 7: no route');
+  });
+
+  it('quotes every value in the curl config', () => {
+    expect(
+      curlConfig('https://x.test/v1', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer k' },
+        body: '{"state":"a\\nb\tc"}\n',
+      }),
+    ).toBe(
+      [
+        'url = "https://x.test/v1"',
+        'request = "POST"',
+        'header = "Authorization: Bearer k"',
+        'data-raw = "{\\"state\\":\\"a\\\\nb\\tc\\"}\\n"',
+        '',
+      ].join('\n'),
+    );
   });
 });
