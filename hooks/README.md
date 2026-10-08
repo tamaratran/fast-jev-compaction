@@ -52,6 +52,7 @@ The plugin declares these `userConfig` values in
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `minReductionRatio` | `0.25` |
+| `textOnlyAfter` | `20` |
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
@@ -61,13 +62,28 @@ The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
+Every option except `apiKey`, `compactAtPercent`, `minReductionRatio`,
+`textOnlyAfter` and `model` is passed straight to the library; see the root README for what they
 do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
 fitted into the state budget, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
-built-in compaction. The outcome is shown as a toast and logged with the
+built-in compaction.
+
+The engine hands the hook only each message's text and tool blocks; a message
+handed back with its `handle` travels whole, so its screenshots, thinking and
+the reminders Claude Code attaches to it (the skill listing, repeated after
+every reload) stay in context however small its text is. With `textOnlyAfter`
+(20 by default, 0 turns it off), every message older than the last N is handed
+back rebuilt from its text and tool blocks, which drops those. The cut moves
+back to a prompt of the person's so no tool call is split from its result,
+the rows of one response are merged back into one message, and a tool result
+left empty (an image) says that something was seen and removed. Claude Code
+injects a fresh skill listing after compacting. When messages were rebuilt the
+`minReductionRatio` check is skipped, since the text estimate cannot see what
+they shed.
+
+The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call
 `decisions:` line with both probabilities is logged for diagnosis. The
 `turn.complete` hook requests

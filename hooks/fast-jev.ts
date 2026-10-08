@@ -22,6 +22,7 @@ import type {
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
+  textOnlyAfter: 20,
   model: DEFAULT_MODEL,
 };
 
@@ -44,6 +45,7 @@ export type HookConfig = CompactOptions & {
   apiKey?: string;
   compactAtPercent: number;
   minReductionRatio: number;
+  textOnlyAfter: number;
   model: string;
 };
 
@@ -66,6 +68,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
+    'injectedMinChars',
+    'replyMinChars',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
@@ -77,6 +81,10 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       options,
       'minReductionRatio',
       HOOK_DEFAULTS.minReductionRatio,
+    ),
+    textOnlyAfter: Math.max(
+      0,
+      Math.floor(optionNumber(options, 'textOnlyAfter', HOOK_DEFAULTS.textOnlyAfter)),
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
@@ -156,9 +164,65 @@ export function toSessionMessages(
   });
 }
 
+const TEXT_ONLY_PLACEHOLDER = '[fast-jev-compaction: an image or other non-text content was here; it was seen and then removed to save context]';
+
+/**
+ * Rebuilds the messages before the last `keepRecent` without their engine
+ * handle. A message kept by handle travels whole (images, thinking, attached
+ * reminders); one rebuilt is read from its text and tool blocks only, so old
+ * screenshots, thinking and repeated skill listings drop out. 0 keeps all.
+ *
+ * The cut moves back to a prompt of the person's, so no tool call is split
+ * from its result. Rebuilt rows lose the response id that tied one response's
+ * blocks together, so consecutive rows of one role are merged back into one
+ * message; a row left with nothing (a thinking block) is dropped.
+ */
+export function stripOlderToText(
+  messages: readonly SessionMessage[],
+  keepRecent: number,
+): { messages: SessionMessage[]; stripped: number } {
+  const whole = { messages: [...messages], stripped: 0 };
+  if (keepRecent <= 0) return whole;
+  let cutoff = messages.length - keepRecent;
+  while (cutoff > 0 && !isPrompt(messages[cutoff])) cutoff -= 1;
+  if (cutoff <= 0) return whole;
+
+  const rebuilt: SessionMessage[] = [];
+  let stripped = 0;
+  for (const message of messages.slice(0, cutoff)) {
+    if (message.handle !== undefined) stripped += 1;
+    const results = (message.toolResults ?? []).map((result) =>
+      result.text.length > 0 ? result : { ...result, text: TEXT_ONLY_PLACEHOLDER },
+    );
+    if (message.text.length === 0 && message.toolUses.length === 0 && results.length === 0) {
+      if (message.role === 'assistant') continue;
+    }
+    const last = rebuilt[rebuilt.length - 1];
+    if (last && last.role === message.role) {
+      last.text = [last.text, message.text].filter(Boolean).join('\n\n');
+      last.toolUses = [...last.toolUses, ...message.toolUses];
+      if (results.length > 0) last.toolResults = [...(last.toolResults ?? []), ...results];
+      continue;
+    }
+    const copy: SessionMessage = { role: message.role, text: message.text, toolUses: [...message.toolUses] };
+    if (results.length > 0) copy.toolResults = [...results];
+    rebuilt.push(copy);
+  }
+  for (const message of rebuilt) {
+    const empty = message.toolUses.length === 0 && (message.toolResults?.length ?? 0) === 0;
+    if (empty && message.text.length === 0) message.text = TEXT_ONLY_PLACEHOLDER;
+  }
+  return { messages: [...rebuilt, ...messages.slice(cutoff)], stripped };
+}
+
+function isPrompt(message: SessionMessage | undefined): boolean {
+  return message?.role === 'user' && (message.toolResults?.length ?? 0) === 0;
+}
+
 export type SessionCompaction = {
   result: CompactResult;
   messages: SessionMessage[];
+  stripped: number;
 };
 
 /** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
@@ -169,7 +233,9 @@ export async function compactSession(
 ): Promise<SessionCompaction> {
   if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
   const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
-  return { result, messages: toSessionMessages(messages, result.messages) };
+  const mapped = toSessionMessages(messages, result.messages);
+  const { messages: out, stripped } = stripOlderToText(mapped, config.textOnlyAfter ?? 0);
+  return { result, messages: out, stripped };
 }
 
 function percent(ratio: number): string {
@@ -183,6 +249,9 @@ export function summarize(result: CompactResult): string {
     stats.resultsDropped > 0 ? `${stats.resultsDropped} results truncated` : '',
     stats.callsDropped > 0 ? `${stats.callsDropped} call_dropped` : '',
     stats.pinned > 0 ? `${stats.pinned} pinned` : '',
+    stats.textsRemoved > 0 ? `${stats.textsRemoved} text blocks removed` : '',
+    stats.duplicatesRemoved > 0 ? `${stats.duplicatesRemoved} duplicates removed` : '',
+    stats.repliesAbridged > 0 ? `${stats.repliesAbridged} replies abridged` : '',
   ].filter(Boolean);
   return `${percent(reductionRatio(result))} reduction; ${
     parts.join(', ') || 'no tool calls'
@@ -192,13 +261,16 @@ export function summarize(result: CompactResult): string {
 const UI_LOG_MAX_CHARS = 4096;
 
 export function decisionLog(result: CompactResult): string {
-  return result.decisions
+  const calls = result.decisions
     .filter((d) => d.reason !== 'pinned')
     .map(
       (d) =>
         `${d.id}:${d.tool}:${d.action}/call=${d.keepCall.toFixed(2)}/result=${d.keepResult.toFixed(2)}`,
-    )
-    .join(' ');
+    );
+  const texts = (result.textDecisions ?? [])
+    .filter((d) => d.reason !== 'pinned' && d.reason !== 'small')
+    .map((d) => `${d.id}:${d.kind}:${d.reason}/keep=${d.keep.toFixed(2)}`);
+  return [...calls, ...texts].join(' ');
 }
 
 export function decisionLogLines(
@@ -263,12 +335,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
+      const { result, messages, stripped } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
-      if (reductionRatio(result) < config.minReductionRatio) {
+      const textOnly = stripped > 0 ? `, ${stripped} older messages reduced to text` : '';
+      if (stripped === 0 && reductionRatio(result) < config.minReductionRatio) {
         notify(
           $,
           `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
@@ -277,7 +350,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       }
       notify(
         $,
-        `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
+        `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)}${textOnly})`,
       );
       return { messages };
     } catch (error) {

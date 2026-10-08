@@ -53,6 +53,20 @@ built-in compaction summary with the original messages.
    removed, untouched messages are returned as the same objects, and no result
    is ever left without its call.
 
+8. **Message text.** Tool output is often only a small share of a long
+   session; most of it is text the harness injected into user turns. Those
+   blocks are candidates too: skill bodies (`Base directory for this skill:`
+   up to the `ARGUMENTS:` line), command output (`<local-command-stdout>`),
+   the `/context` report and `<system-reminder>`s. In the state each one
+   shows up as a `[x3: skill ui-ux-pro-max, 44559 chars]` note, and Jev gets
+   one question per block at least `injectedMinChars` long (1000 by default).
+   A block Jev drops is replaced by `[fast-jev-compaction removed …]`; a block
+   whose exact content appears again later is dropped without asking. Long
+   assistant replies (`replyMinChars`, 2000 by default) get a question too and,
+   if dropped, keep their first 600 and last 300 characters. What the person
+   typed is never a candidate, and pinned messages are never touched. Set both
+   thresholds to 0 to leave all message text alone.
+
 Jev failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 
@@ -110,9 +124,13 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `injectedMinChars` | `1000` | Injected text blocks at least this long are judged by Jev; `0` leaves message text alone |
+| `replyMinChars` | `2000` | Assistant replies at least this long may be abridged to head and tail; `0` never abridges |
+| `textOnlyAfter` | `20` | Claude Code hook only: messages older than the last N lose their screenshots, thinking and attached reminders; `0` keeps them whole |
 
 `result.stats` reports message and character counts before and after, the
-per-reason decision counts, the state size in estimated tokens, which fitting
+per-reason decision counts (tool calls and text blocks; `result.textDecisions`
+lists the latter), the state size in estimated tokens, which fitting
 stage was needed, and the number of requests.
 
 ## Limitations

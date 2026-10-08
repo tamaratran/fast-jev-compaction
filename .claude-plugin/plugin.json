@@ -52,6 +52,24 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "injectedMinChars": {
+      "type": "number",
+      "title": "Injected text threshold",
+      "description": "Skill bodies, command output and reminders at least this long are judged by Jev and can be removed; repeats are dropped regardless. 0 leaves all message text alone.",
+      "default": 1000
+    },
+    "replyMinChars": {
+      "type": "number",
+      "title": "Long reply threshold",
+      "description": "Assistant replies at least this long can be abridged to their opening and closing when Jev says the full wording is no longer needed. 0 never abridges.",
+      "default": 2000
+    },
+    "textOnlyAfter": {
+      "type": "number",
+      "title": "Text-only after",
+      "description": "Messages older than the last N are kept as text and tool calls only, dropping their screenshots, thinking and attached reminders. 0 keeps every message whole.",
+      "default": 20
+    },
     "model": {
       "type": "string",
       "title": "Jev model",

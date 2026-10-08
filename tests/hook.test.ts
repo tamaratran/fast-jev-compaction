@@ -4,6 +4,7 @@ import {
   decisionLog,
   decisionLogLines,
   resolveHookConfig,
+  stripOlderToText,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
@@ -53,7 +54,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, textOnlyAfter: 20, model: 'jev-latest' });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -64,7 +65,66 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      textOnlyAfter: 20,
     });
+    expect(resolveHookConfig({ textOnlyAfter: 0 }).textOnlyAfter).toBe(0);
+    expect(resolveHookConfig({ textOnlyAfter: -3.5 }).textOnlyAfter).toBe(0);
+  });
+});
+
+describe('text-only for older messages', () => {
+  it('rebuilds the messages before a prompt of the person without their handle', () => {
+    const { messages, stripped } = stripOlderToText(transcript(), 1);
+    expect(stripped).toBe(6);
+    expect(messages.map((m) => m.handle)).toEqual([undefined, undefined, undefined, undefined, undefined, undefined, 'h-6']);
+    expect(messages[0]).toEqual({ role: 'user', text: 'Fix the failing test.', toolUses: [] });
+    expect(messages[1]?.toolUses[0]?.tool_use_id).toBe('tool-1');
+    expect(messages[2]?.toolResults?.[0]?.tool_use_id).toBe('tool-1');
+  });
+
+  it('moves the cut back to a prompt so a tool call keeps its result', () => {
+    expect(stripOlderToText(transcript(), 2).stripped).toBe(0);
+  });
+
+  it('merges the rows of one response and drops thinking-only rows', () => {
+    const input = [
+      message('user', 'read both', { handle: 'p' }),
+      message('assistant', '', { handle: 'think' }),
+      message('assistant', '', { toolUses: [{ tool_use_id: 'a', tool: 'Read', input: {} }], handle: 'ua' }),
+      message('assistant', '', { toolUses: [{ tool_use_id: 'b', tool: 'Read', input: {} }], handle: 'ub' }),
+      message('user', '', { toolResults: [{ tool_use_id: 'a', text: 'A', isError: false }], handle: 'ra' }),
+      message('user', '', { toolResults: [{ tool_use_id: 'b', text: '', isError: false }], handle: 'rb' }),
+      message('assistant', 'done', { handle: 'd' }),
+      message('user', 'next', { handle: 'n' }),
+    ];
+    const { messages, stripped } = stripOlderToText(input, 1);
+    expect(stripped).toBe(7);
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user']);
+    expect(messages[1]?.toolUses.map((u) => u.tool_use_id)).toEqual(['a', 'b']);
+    expect(messages[1]?.text).toBe('');
+    expect(messages[3]?.text).toBe('done');
+    expect(messages[2]?.toolResults?.map((r) => r.tool_use_id)).toEqual(['a', 'b']);
+    expect(messages[2]?.toolResults?.[1]?.text).toBe('[fast-jev-compaction: an image or other non-text content was here; it was seen and then removed to save context]');
+    expect(input[5]?.toolResults?.[0]?.text).toBe('');
+  });
+
+  it('keeps an image-only prompt as a placeholder instead of an empty turn', () => {
+    const input = [message('user', '', { handle: 'img' }), message('assistant', 'ok', { handle: 'a' }), message('user', 'go', { handle: 'g' })];
+    const { messages } = stripOlderToText(input, 1);
+    expect(messages[0]?.text).toBe('[fast-jev-compaction: an image or other non-text content was here; it was seen and then removed to save context]');
+    expect(messages[0]?.handle).toBeUndefined();
+  });
+
+  it('leaves everything whole at 0 or when the transcript is short', () => {
+    expect(stripOlderToText(transcript(), 0).stripped).toBe(0);
+    expect(stripOlderToText(transcript(), 50).stripped).toBe(0);
+  });
+
+  it('compactSession applies it after the Jev decisions', async () => {
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1, textOnlyAfter: 1 }), apiKey: 'k' };
+    const { messages, stripped } = await compactSession(transcript(), config, jevFetch(() => 0.9));
+    expect(stripped).toBe(6);
+    expect(messages.at(-1)?.handle).toBe('h-6');
   });
 });
 

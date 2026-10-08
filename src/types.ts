@@ -63,6 +63,39 @@ export interface CallDecision extends CallAnswer {
   reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';
 }
 
+export type TextKind = 'skill' | 'context_report' | 'command_output' | 'system_reminder' | 'reply';
+
+/** A stretch of message text that may go: an injected block or a long assistant reply. */
+export interface TextBlock {
+  /** Short id used in the Jev state and question names (`x1`, `x2`, ...). */
+  id: string;
+  /** Index of the message holding the block. */
+  index: number;
+  kind: TextKind;
+  /** Character offsets in the message text; a reply spans the whole text. */
+  start: number;
+  end: number;
+  chars: number;
+  label: string;
+  /** In the first or the newest preserved messages; never touched. */
+  pinned: boolean;
+  /** The same content appears again later; dropped without asking Jev. */
+  duplicate: boolean;
+}
+
+export interface TextAnswer {
+  /** Jev's probability that the block still needs to stay verbatim. */
+  keep: number;
+}
+
+export interface TextDecision extends TextAnswer {
+  id: string;
+  kind: TextKind;
+  label: string;
+  action: 'keep' | 'remove' | 'abridge';
+  reason: 'pinned' | 'small' | 'kept' | 'duplicate' | 'removed' | 'abridged';
+}
+
 export interface HistoryToolCall {
   id: string;
   tool: string;
@@ -74,6 +107,8 @@ export interface HistoryEntry {
   i: number;
   role: Role;
   text: string;
+  /** Id of the reply block this entry's text is, when Jev is asked about it. */
+  text_block?: string;
   /** Structured per call, or one compact line per call once the state has to shrink. */
   tool_calls?: HistoryToolCall[] | string[];
 }
@@ -105,6 +140,10 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /** Injected blocks (skills, command output, reminders) at least this long are judged by Jev; 0 leaves all text alone. Default 1000. */
+  injectedMinChars?: number;
+  /** Assistant replies at least this long may be abridged to head and tail; 0 never abridges. Default 2000. */
+  replyMinChars?: number;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,12 +153,15 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  injectedMinChars: number;
+  replyMinChars: number;
 }
 
 export interface CompactResult {
   /** The compacted transcript; untouched messages are the input objects. */
   messages: Message[];
   decisions: CallDecision[];
+  textDecisions: TextDecision[];
   stats: {
     messagesBefore: number;
     messagesAfter: number;
@@ -130,6 +172,11 @@ export interface CompactResult {
     resultsDropped: number;
     callsDropped: number;
     pinned: number;
+    /** Text blocks found, and how many were removed, deduplicated or abridged. */
+    texts: number;
+    textsRemoved: number;
+    duplicatesRemoved: number;
+    repliesAbridged: number;
     stateTokens: number;
     /** Which fitting stage the state needed, '' when no request was made. */
     stateStage: string;

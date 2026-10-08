@@ -1,5 +1,6 @@
 import { noulAnswer } from './request.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
+import { applyTextDecisions, collectTextBlocks, decideText, textCandidates, textQuestionsFor } from './text.js';
 import type {
   CallAnswer,
   CallDecision,
@@ -10,6 +11,9 @@ import type {
   JevQuestions,
   Message,
   ResolvedCompactOptions,
+  TextAnswer,
+  TextBlock,
+  TextDecision,
   ToolCall,
   ToolUse,
 } from './types.js';
@@ -21,6 +25,8 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  injectedMinChars: 1000,
+  replyMinChars: 2000,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,6 +55,14 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    injectedMinChars: Math.max(
+      0,
+      Math.floor(finite(options.injectedMinChars, DEFAULT_OPTIONS.injectedMinChars)),
+    ),
+    replyMinChars: Math.max(
+      0,
+      Math.floor(finite(options.replyMinChars, DEFAULT_OPTIONS.replyMinChars)),
+    ),
   };
 }
 
@@ -75,12 +89,22 @@ export function batchCalls(
   stateTokens: number,
   options: Pick<ResolvedCompactOptions, 'maxRequestTokens'>,
 ): ToolCall[][] {
+  return batchItems(calls, questionsFor, stateTokens, options);
+}
+
+/** Splits any items into batches whose questions, with the state, fit one request. */
+export function batchItems<T>(
+  items: readonly T[],
+  questionsOf: (item: T) => JevQuestions,
+  stateTokens: number,
+  options: Pick<ResolvedCompactOptions, 'maxRequestTokens'>,
+): T[][] {
   const budget = options.maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
-  const batches: ToolCall[][] = [];
-  let current: ToolCall[] = [];
+  const batches: T[][] = [];
+  let current: T[] = [];
   let currentTokens = 0;
-  for (const call of calls) {
-    const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
+  for (const call of items) {
+    const tokens = estimateTokens(JSON.stringify(questionsOf(call)));
     if (current.length > 0 && currentTokens + tokens > budget) {
       batches.push(current);
       current = [];
@@ -114,22 +138,32 @@ export function decideCall(
   return { ...base, action: 'drop_call', reason: 'call_dropped' };
 }
 
+type Item = { call: ToolCall } | { block: TextBlock };
+
+function itemQuestions(item: Item): JevQuestions {
+  return 'call' in item ? questionsFor(item.call) : textQuestionsFor(item.block);
+}
+
 async function askBatch(
   asker: JevAsker,
   state: CompactionState,
-  batch: readonly ToolCall[],
-): Promise<Map<string, CallAnswer>> {
-  const questions: JevQuestions = Object.assign({}, ...batch.map(questionsFor));
+  batch: readonly Item[],
+): Promise<{ calls: Map<string, CallAnswer>; texts: Map<string, TextAnswer> }> {
+  const questions: JevQuestions = Object.assign({}, ...batch.map(itemQuestions));
   const { answers } = await asker.ask(state, questions);
-  return new Map(
-    batch.map((call) => [
-      call.id,
-      {
-        keepCall: noulAnswer(answers, `call_${call.id}`),
-        keepResult: noulAnswer(answers, `result_${call.id}`),
-      },
-    ]),
-  );
+  const calls = new Map<string, CallAnswer>();
+  const texts = new Map<string, TextAnswer>();
+  for (const item of batch) {
+    if ('call' in item) {
+      calls.set(item.call.id, {
+        keepCall: noulAnswer(answers, `call_${item.call.id}`),
+        keepResult: noulAnswer(answers, `result_${item.call.id}`),
+      });
+    } else {
+      texts.set(item.block.id, { keep: noulAnswer(answers, `text_${item.block.id}`) });
+    }
+  }
+  return { calls, texts };
 }
 
 function truncatedResultText(text: string, isError: boolean, headChars: number): string {
@@ -243,14 +277,16 @@ export function reductionRatio(result: Pick<CompactResult, 'stats'>): number {
   return charsBefore === 0 ? 0 : (charsBefore - charsAfter) / charsBefore;
 }
 
-function count(decisions: readonly CallDecision[], reason: CallDecision['reason']): number {
+function count<D extends { reason: string }>(decisions: readonly D[], reason: D['reason']): number {
   return decisions.filter((decision) => decision.reason === reason).length;
 }
 
 /**
  * Compacts a transcript by asking Jev, for every tool call outside the pinned
  * first and newest messages, whether the call and whether its result must
- * stay. The whole history (results omitted, fitted into `maxStateTokens`) is
+ * stay, and for every injected text block (skill bodies, command output,
+ * reminders) and long assistant reply whether it must stay verbatim. Blocks
+ * repeated later are dropped without asking. The whole history (results omitted, fitted into `maxStateTokens`) is
  * sent as state with every batch of questions. Throws when Jev fails or the
  * history cannot be fitted; the caller decides whether to fall back.
  */
@@ -263,26 +299,39 @@ export async function compact(
   const resolved = resolveOptions(options);
   const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
   const candidates = calls.filter((call) => !call.pinned);
+  const blocks = collectTextBlocks(messages, resolved);
+  const textAsked = textCandidates(blocks, resolved);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
-  let batches: ToolCall[][] = [];
+  let batches: Item[][] = [];
   const answers = new Map<string, CallAnswer>();
-  if (candidates.length > 0) {
-    const state = fitState(messages, calls, resolved);
+  const textAnswers = new Map<string, TextAnswer>();
+  const items: Item[] = [
+    ...candidates.map((call) => ({ call })),
+    ...textAsked.map((block) => ({ block })),
+  ];
+  if (items.length > 0) {
+    const state = fitState(messages, calls, resolved, blocks);
     fitted = state;
-    batches = batchCalls(candidates, state.tokens, resolved);
+    batches = batchItems(items, itemQuestions, state.tokens, resolved);
     const answered = await Promise.all(
       batches.map((batch) => askBatch(asker, state.state, batch)),
     );
-    for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
+    for (const part of answered) {
+      for (const [id, answer] of part.calls) answers.set(id, answer);
+      for (const [id, answer] of part.texts) textAnswers.set(id, answer);
+    }
   }
 
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
   );
+  const textDecisions: TextDecision[] = blocks.map((block) =>
+    decideText(block, textAnswers.get(block.id), resolved),
+  );
   const kept = applyDecisions(
-    messages,
+    applyTextDecisions(messages, blocks, textDecisions),
     decisions,
     calls,
     resolved.truncateHeadChars,
@@ -290,6 +339,7 @@ export async function compact(
   return {
     messages: kept,
     decisions,
+    textDecisions,
     stats: {
       messagesBefore: messages.length,
       messagesAfter: kept.length,
@@ -300,6 +350,10 @@ export async function compact(
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
       pinned: count(decisions, 'pinned'),
+      texts: blocks.length,
+      textsRemoved: count(textDecisions, 'removed'),
+      duplicatesRemoved: count(textDecisions, 'duplicate'),
+      repliesAbridged: count(textDecisions, 'abridged'),
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
       requests: batches.length,
