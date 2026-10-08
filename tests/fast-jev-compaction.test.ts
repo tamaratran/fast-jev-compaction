@@ -13,6 +13,7 @@ import {
   parseJevResponse,
   reductionRatio,
   resolveOptions,
+  truncate,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -429,5 +430,53 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('surrogate-safe truncation', () => {
+  const astral = '\u{1F600}'; // U+1F600, stored as a surrogate pair (2 UTF-16 units)
+
+  it('truncate never leaves a lone leading surrogate before the ellipsis', () => {
+    const text = 'x'.repeat(7) + astral + 'y'.repeat(10);
+    // limit 9 cuts at unit 8, the leading surrogate of the astral character
+    const cut = truncate(text, 9);
+    const content = cut.slice(0, -1); // strip the ellipsis
+    const last = content.charCodeAt(content.length - 1);
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    expect(cut.endsWith('\u2026')).toBe(true);
+  });
+
+  it('truncate keeps whole astral characters when the cut lands inside a pair', () => {
+    const text = astral.repeat(10);
+    const cut = truncate(text, 6);
+    expect(cut).toBe(astral.repeat(2) + '\u2026');
+    expect([...cut].length).toBe(3);
+  });
+
+  it('fitState emits no lone surrogates when abridging emoji-heavy texts', () => {
+    // One long unpinned message whose abridge cut (unit 400) lands in the
+    // middle of an astral pair, plus enough padding to reach that stage and
+    // stay under the limit after abridging.
+    const emojiText = 'a'.repeat(399) + astral.repeat(200); // cut at 400 splits the pair at 399/400
+    const messages = [
+      message('user', 'start'),
+      message('assistant', emojiText),
+      call('w', 'Write', { file_path: 'x.ts', content: 'ok' }, 'ok'),
+      result('w', 'ok'),
+      message('assistant', 'done'),
+      message('user', 'next'),
+    ];
+    const { state, stage } = fitState(messages, collectToolCalls(messages, 0), {
+      ...fit,
+      maxStateTokens: 560,
+      preserveRecentMessages: 2,
+    });
+    expect(stage).toBe('texts abridged');
+    const serialised = JSON.stringify(state);
+    expect(() => JSON.parse(serialised)).not.toThrow();
+    // no leading surrogate left dangling at the end of a sliced piece
+    expect(serialised.match(/\ud800[\ud800-\udbff]/g)).toBeNull();
+    // no trailing surrogate without its leading half
+    expect(serialised.match(/[^\ud800-\udbff]\udc00|^\udc00/g)).toBeNull();
   });
 });
