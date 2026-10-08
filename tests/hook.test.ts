@@ -69,7 +69,7 @@ describe('hook config', () => {
 });
 
 describe('session message mapping', () => {
-  it('returns the engine objects for untouched messages and handle-less copies for rebuilt ones', () => {
+  it('returns the engine objects for untouched messages and rebuilt ones that keep their handles', () => {
     const messages = transcript();
     const calls = collectToolCalls(messages, 0);
     const decisions = [
@@ -81,17 +81,73 @@ describe('session message mapping', () => {
     const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300));
     expect(out).toHaveLength(messages.length);
     expect(out[0]).toBe(messages[0]);
-    expect(out[1]?.handle).toBeUndefined();
+    // rebuilt, but still the engine's message: the handle maps the edited
+    // content back instead of minting a new message (#137).
+    expect(out[1]?.handle).toBe('h-tool-1');
     expect(out[1]?.toolUses[0]?.text).toMatch(
       new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
     );
-    expect(out[2]?.handle).toBeUndefined();
+    expect(out[2]?.handle).toBe('r-tool-1');
     expect(out[2]?.toolResults?.[0]?.text).toMatch(
       new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
     );
     expect(out[2]?.toolResults?.[0]).toMatchObject({ tool_use_id: 'tool-1', isError: false });
     expect(out[3]).toBe(messages[3]);
     expect(out[4]).toBe(messages[4]);
+  });
+
+  it('keeps one parallel-call group on one message when a single result is truncated (#137)', () => {
+    const big = 'data\n'.repeat(500);
+    const group: SessionMessage[] = [
+      message('user', 'read the docs', { handle: 'h-0' }),
+      {
+        role: 'assistant',
+        text: '',
+        toolUses: [
+          { tool_use_id: 'tool-a', tool: 'Read', input: { file_path: 'a.md' }, text: big },
+          { tool_use_id: 'tool-b', tool: 'Read', input: { file_path: 'b.md' }, text: big },
+          { tool_use_id: 'tool-c', tool: 'Read', input: { file_path: 'c.md' }, text: big },
+        ],
+        handle: 'h-group',
+      },
+      {
+        role: 'user',
+        text: '',
+        toolUses: [],
+        toolResults: [
+          { tool_use_id: 'tool-a', text: big, isError: false },
+          { tool_use_id: 'tool-b', text: big, isError: false },
+          { tool_use_id: 'tool-c', text: big, isError: false },
+        ],
+        handle: 'r-group',
+      },
+    ];
+    const calls = collectToolCalls(group, 0);
+    const decisions = calls.map((call) =>
+      decideCall(
+        call,
+        call.tool_use_id === 'tool-b'
+          ? { keepCall: 0.9, keepResult: 0.1 }
+          : { keepCall: 0.9, keepResult: 0.9 },
+        { keepThreshold: 0.5 },
+      ),
+    );
+    const out = toSessionMessages(group, applyDecisions(group, decisions, calls, 300));
+    expect(out).toHaveLength(3);
+    // the group's rows keep their identity: no new message is minted.
+    expect(out[1]?.handle).toBe('h-group');
+    expect(out[2]?.handle).toBe('r-group');
+    // untouched siblings stay the engine's own objects; only the truncated
+    // call's text is rebuilt.
+    expect(out[1]?.toolUses.map((t) => t.tool_use_id)).toEqual(['tool-a', 'tool-b', 'tool-c']);
+    expect(out[1]?.toolUses[0]).toBe(group[1]?.toolUses[0]);
+    expect(out[1]?.toolUses[2]).toBe(group[1]?.toolUses[2]);
+    expect(out[1]?.toolUses[1]?.text).toBe(
+      `${big.slice(0, 300)}\n[fast-jev-compaction truncated 2200 chars of this tool result; re-run the tool if needed]`,
+    );
+    expect(out[2]?.toolResults?.[1]?.text).toBe(
+      `${big.slice(0, 300)}\n[fast-jev-compaction truncated 2200 chars of this tool result; re-run the tool if needed]`,
+    );
   });
 
   it('preserves short dropped-result messages and their handles', () => {

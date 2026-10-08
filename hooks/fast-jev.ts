@@ -124,8 +124,11 @@ function toolResultSummary(result: ToolResult): ToolResultSummary {
 /**
  * Maps the library's output back onto session messages. Whatever came back
  * unchanged (a message, a tool use, a tool result) is the engine's own object,
- * handle included; anything rebuilt is a fresh message without a handle, so the
- * engine takes the edited content instead of its original.
+ * handle included. A rebuilt message keeps the handle of the input message it
+ * was built from, so the engine applies the edited content to that same
+ * message: without it the engine mints a new message id, which splits one
+ * parallel tool-call group across two assistant messages and breaks
+ * tool_result pairing (#137).
  */
 export function toSessionMessages(
   input: readonly SessionMessage[],
@@ -134,11 +137,32 @@ export function toSessionMessages(
   const messages = new Map<Message, SessionMessage>();
   const uses = new Map<ToolUse, ToolUseSummary>();
   const results = new Map<ToolResult, ToolResultSummary>();
+  // tool_use_ids are unique per role across the transcript, so the first input
+  // message holding one identifies the message a rebuilt row was built from.
+  const useHolders = new Map<string, SessionMessage>();
+  const resultHolders = new Map<string, SessionMessage>();
   for (const message of input) {
     messages.set(message, message);
-    for (const tool of message.toolUses) uses.set(tool, tool);
-    for (const result of message.toolResults ?? []) results.set(result, result);
+    for (const tool of message.toolUses) {
+      uses.set(tool, tool);
+      if (!useHolders.has(tool.tool_use_id)) useHolders.set(tool.tool_use_id, message);
+    }
+    for (const result of message.toolResults ?? []) {
+      results.set(result, result);
+      if (!resultHolders.has(result.tool_use_id)) resultHolders.set(result.tool_use_id, message);
+    }
   }
+  const sourceOf = (message: Message): SessionMessage | undefined => {
+    for (const tool of message.toolUses) {
+      const source = useHolders.get(tool.tool_use_id);
+      if (source) return source;
+    }
+    for (const result of message.toolResults ?? []) {
+      const source = resultHolders.get(result.tool_use_id);
+      if (source) return source;
+    }
+    return undefined;
+  };
   return output.map((message) => {
     const own = messages.get(message);
     if (own) return own;
@@ -152,6 +176,8 @@ export function toSessionMessages(
         (result) => results.get(result) ?? toolResultSummary(result),
       );
     }
+    const handle = sourceOf(message)?.handle;
+    if (handle !== undefined) rebuilt.handle = handle;
     return rebuilt;
   });
 }
