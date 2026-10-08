@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -9,6 +9,11 @@
       "title": "TypeSafe API key",
       "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
       "sensitive": true
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "System One URL",
+      "description": "System One endpoint, e.g. a local proxy that adds the key. Leave unset to use TYPESAFE_BASE_URL, else https://api.typesafe.ai/v1/systemone."
     },
     "keepThreshold": {
       "type": "number",
