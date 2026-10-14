@@ -3,6 +3,7 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -53,9 +54,22 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtPercent: 60,
+      logDecisions: false,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+    });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({
+        apiKey: 'k',
+        keepThreshold: 0.3,
+        maxStateTokens: 1000,
+        model: 'jev-x',
+        goal: 'g',
+        compactAtPercent: 'no',
+        logDecisions: 'yes',
+      }),
     ).toEqual({
       apiKey: 'k',
       keepThreshold: 0.3,
@@ -63,8 +77,56 @@ describe('hook config', () => {
       model: 'jev-x',
       goal: 'g',
       compactAtPercent: 60,
+      logDecisions: false,
       minReductionRatio: 0.25,
     });
+    expect(resolveHookConfig({ logDecisions: true }).logDecisions).toBe(true);
+  });
+});
+
+describe('session.compact hook', () => {
+  type CompactHandler = (
+    $: unknown,
+    event: { messages: SessionMessage[] },
+    next: (event: unknown) => unknown,
+  ) => Promise<unknown>;
+
+  /** Registers the hook against a fake engine and runs one compaction. */
+  async function runCompact(options: Record<string, number | string | boolean>) {
+    const handlers = new Map<string, CompactHandler>();
+    const on = (name: string, handler: CompactHandler) => handlers.set(name, handler);
+    register(on as unknown as Parameters<typeof register>[0], {
+      apiKey: 'k',
+      preserveRecentMessages: 1,
+      minReductionRatio: 0,
+      ...options,
+    });
+    const logs: string[] = [];
+    const toasts: string[] = [];
+    const $ = {
+      ui: { log: (text: string) => logs.push(text), toast: (text: string) => toasts.push(text) },
+      http: { fetch: jevFetch(() => 0.1) },
+      env: { get: async () => undefined },
+      settings: { read: async () => ({}) },
+    };
+    await handlers.get('session.compact')!($, { messages: transcript() }, (event) => event);
+    return { logs, toasts };
+  }
+
+  it('logs only the one-line outcome by default', async () => {
+    const { logs, toasts } = await runCompact({});
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/^kept \d+\/\d+ messages, no summary \(/);
+    expect(toasts).toEqual(logs);
+  });
+
+  it('adds the per-call decisions lines before the outcome when logDecisions is on', async () => {
+    const { logs, toasts } = await runCompact({ logDecisions: true });
+    expect(logs).toEqual([
+      'decisions: t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:drop_call/call=0.10/result=0.10',
+      expect.stringMatching(/^kept \d+\/\d+ messages, no summary \(/),
+    ]);
+    expect(toasts).toEqual([logs[1]]);
   });
 });
 

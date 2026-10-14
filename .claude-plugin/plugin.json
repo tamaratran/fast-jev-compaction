@@ -57,6 +57,12 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "logDecisions": {
+      "type": "boolean",
+      "title": "Log per-call decisions",
+      "description": "Also write the per-call decisions: lines (both probabilities for every scored call) to the transcript after each compaction. The one-line outcome is always logged.",
+      "default": false
     }
   }
 }
