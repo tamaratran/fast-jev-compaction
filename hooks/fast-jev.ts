@@ -322,12 +322,26 @@ export const register: Register = (on: On, options: PluginOptions) => {
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
       compacting = true;
-      await $.session.compact();
+      // Calling $.session.compact() synchronously here always fails with
+      // "a turn is in flight": the engine still considers this turn.complete
+      // dispatch part of the turn. Defer to its own dispatch, one tick later,
+      // once the turn has actually closed out.
+      $.clock.after(0, () => {
+        $.session
+          .compact()
+          .catch((error) => {
+            $.ui.log(
+              `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,
+            );
+          })
+          .finally(() => {
+            compacting = false;
+          });
+      });
     } catch (error) {
       $.ui.log(
         `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,
       );
-    } finally {
       compacting = false;
     }
     return next(event);

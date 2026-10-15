@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -174,5 +175,83 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('turn.complete auto-compact', () => {
+  function mockEngine(overrides: { percent: number; compact: () => Promise<unknown> }) {
+    const logs: string[] = [];
+    const after = vi.fn((_ms: number, fn: () => void) => {
+      fn();
+      return { cancel: () => {} };
+    });
+    const $ = {
+      session: {
+        usage: async () => ({ context: { percent: overrides.percent } }),
+        compact: overrides.compact,
+      },
+      clock: { after, every: vi.fn() },
+      ui: { log: (text: string) => logs.push(text), toast: () => {} },
+      env: { get: async () => undefined },
+      settings: { read: async () => ({}) },
+    };
+    return { $, logs, after };
+  }
+
+  function capture() {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const on = (event: string, handler: (...args: unknown[]) => unknown) => {
+      handlers.set(event, handler);
+    };
+    return { on, handlers };
+  }
+
+  it('defers session.compact() to its own dispatch instead of calling it inline', async () => {
+    const compact = vi.fn(async () => ({}));
+    const { $, after } = mockEngine({ percent: 80, compact });
+    const { on, handlers } = capture();
+    register(on as never, {});
+    const next = async (e: unknown) => e;
+    await handlers.get('turn.complete')!($, {}, next);
+
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(after.mock.calls[0]![0]).toBe(0);
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs and clears the compacting flag instead of surfacing "a turn is in flight" as an unhandled rejection', async () => {
+    const compact = vi.fn(async () => {
+      throw new Error('a turn is in flight; the conversation compacts between turns');
+    });
+    const { $, logs } = mockEngine({ percent: 80, compact });
+    const { on, handlers } = capture();
+    register(on as never, {});
+    const next = async (e: unknown) => e;
+    const turnComplete = handlers.get('turn.complete')!;
+
+    await turnComplete($, {}, next);
+    // Give the deferred compact() promise's .catch/.finally a microtask to run.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(logs).toEqual(['auto-compact skipped (a turn is in flight; the conversation compacts between turns)']);
+
+    // A second turn.complete must not be blocked by a compacting flag stuck true.
+    await turnComplete($, {}, next);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(compact).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips entirely below the configured compaction percentage', async () => {
+    const compact = vi.fn(async () => ({}));
+    const { $, after } = mockEngine({ percent: 10, compact });
+    const { on, handlers } = capture();
+    register(on as never, {});
+    const next = async (e: unknown) => e;
+    await handlers.get('turn.complete')!($, {}, next);
+
+    expect(after).not.toHaveBeenCalled();
+    expect(compact).not.toHaveBeenCalled();
   });
 });
