@@ -1,13 +1,13 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
-  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "version": "0.4.0",
+  "description": "Verbatim Jev-guided compaction for Claude Code sessions (TypeSafe API or OpenRouter).",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "title": "API key",
+      "description": "TypeSafe or OpenRouter API key. Leave unset to use TYPESAFE_API_KEY or OPENROUTER_API_KEY from the environment or settings env. An OpenRouter key (sk-or-…) routes to OpenRouter's Decisions endpoint.",
       "sensitive": true
     },
     "keepThreshold": {
@@ -55,8 +55,13 @@
     "model": {
       "type": "string",
       "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
+      "description": "Jev model name. On OpenRouter, jev-latest becomes ~typesafe/jev-latest and a bare name like jev-1.13 becomes typesafe/jev-1.13; names with a slash are sent as given.",
       "default": "jev-latest"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Jev endpoint URL",
+      "description": "Full endpoint URL. Leave unset to pick from the key: https://api.typesafe.ai/v1/systemone for a TypeSafe key, https://openrouter.ai/api/alpha/decisions for an OpenRouter key."
     }
   }
 }

@@ -8,8 +8,8 @@
     {
       "name": "fast-jev-compaction",
       "source": "./",
-      "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
-      "version": "0.3.0",
+      "description": "Verbatim Jev-guided compaction for Claude Code sessions (TypeSafe API or OpenRouter).",
+      "version": "0.4.0",
       "license": "MIT"
     }
   ]

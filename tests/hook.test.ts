@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -53,14 +54,15 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25 });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', baseUrl: 'http://x/', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
       apiKey: 'k',
       keepThreshold: 0.3,
       maxStateTokens: 1000,
       model: 'jev-x',
+      baseUrl: 'http://x/',
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
@@ -139,11 +141,117 @@ describe('compactSession', () => {
     expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);
   });
 
+  it('routes an OpenRouter key to the Decisions endpoint and maps the model name', async () => {
+    const seen: { url: string; model: string }[] = [];
+    const fetchFn = async (url: string, init?: { body?: string }) => {
+      const { questions, model } = JSON.parse(init?.body ?? '{}') as { questions: Record<string, unknown>; model: string };
+      seen.push({ url, model });
+      const answers = Object.fromEntries(Object.keys(questions).map((key) => [key, { type: 'noul', noul: 0.9 }]));
+      return { status: 200, ok: true, text: JSON.stringify({ answers }) };
+    };
+    await compactSession(transcript(), { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'sk-or-v1-k' }, fetchFn);
+    await compactSession(
+      transcript(),
+      { ...resolveHookConfig({ preserveRecentMessages: 1, model: 'jev-1.13' }), apiKey: 'sk-or-v1-k' },
+      fetchFn,
+    );
+    await compactSession(
+      transcript(),
+      { ...resolveHookConfig({ preserveRecentMessages: 1, baseUrl: 'http://x/' }), apiKey: 'sk-or-v1-k' },
+      fetchFn,
+    );
+    await compactSession(transcript(), { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'ts-k' }, fetchFn);
+    expect(seen).toEqual([
+      { url: 'https://openrouter.ai/api/alpha/decisions', model: '~typesafe/jev-latest' },
+      { url: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13' },
+      { url: 'http://x/', model: 'jev-latest' },
+      { url: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest' },
+    ]);
+  });
+
   it('throws on a missing key and on failed requests so the hook falls back', async () => {
     const config = resolveHookConfig({ preserveRecentMessages: 1 });
     await expect(compactSession(transcript(), config, jevFetch(() => 0))).rejects.toThrow(/TYPESAFE_API_KEY/);
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('turn.complete auto-compact', () => {
+  function mockEngine(overrides: { percent: number; compact: () => Promise<unknown> }) {
+    const logs: string[] = [];
+    const after = vi.fn((_ms: number, fn: () => void) => {
+      fn();
+      return { cancel: () => {} };
+    });
+    const $ = {
+      session: {
+        usage: async () => ({ context: { percent: overrides.percent } }),
+        compact: overrides.compact,
+      },
+      clock: { after, every: vi.fn() },
+      ui: { log: (text: string) => logs.push(text), toast: () => {} },
+      env: { get: async () => undefined },
+      settings: { read: async () => ({}) },
+    };
+    return { $, logs, after };
+  }
+
+  function capture() {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const on = (event: string, handler: (...args: unknown[]) => unknown) => {
+      handlers.set(event, handler);
+    };
+    return { on, handlers };
+  }
+
+  it('defers session.compact() to its own dispatch instead of calling it inline', async () => {
+    const compact = vi.fn(async () => ({}));
+    const { $, after } = mockEngine({ percent: 80, compact });
+    const { on, handlers } = capture();
+    register(on as never, {});
+    const next = async (e: unknown) => e;
+    await handlers.get('turn.complete')!($, {}, next);
+
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(after.mock.calls[0]![0]).toBe(0);
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs and clears the compacting flag instead of surfacing "a turn is in flight" as an unhandled rejection', async () => {
+    const compact = vi.fn(async () => {
+      throw new Error('a turn is in flight; the conversation compacts between turns');
+    });
+    const { $, logs } = mockEngine({ percent: 80, compact });
+    const { on, handlers } = capture();
+    register(on as never, {});
+    const next = async (e: unknown) => e;
+    const turnComplete = handlers.get('turn.complete')!;
+
+    await turnComplete($, {}, next);
+    // Give the deferred compact() promise's .catch/.finally a microtask to run.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(logs).toEqual(['auto-compact skipped (a turn is in flight; the conversation compacts between turns)']);
+
+    // A second turn.complete must not be blocked by a compacting flag stuck true.
+    await turnComplete($, {}, next);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(compact).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips entirely below the configured compaction percentage', async () => {
+    const compact = vi.fn(async () => ({}));
+    const { $, after } = mockEngine({ percent: 10, compact });
+    const { on, handlers } = capture();
+    register(on as never, {});
+    const next = async (e: unknown) => e;
+    await handlers.get('turn.complete')!($, {}, next);
+
+    expect(after).not.toHaveBeenCalled();
+    expect(compact).not.toHaveBeenCalled();
   });
 });
