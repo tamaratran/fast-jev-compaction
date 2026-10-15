@@ -57,6 +57,12 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "logDecisions": {
+      "type": "boolean",
+      "title": "Log per-call decisions",
+      "description": "Log a decisions: line with Jev's keep probabilities for every tool call after each compaction.",
+      "default": false
     }
   }
 }
