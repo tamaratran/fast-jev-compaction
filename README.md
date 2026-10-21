@@ -58,6 +58,8 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 
 ## Install and usage
 
+Get a `TYPESAFE_API_KEY` from the [TypeSafe console](https://console.typesafe.ai/keys).
+
 ```sh
 npm install fast-jev-compaction
 export TYPESAFE_API_KEY=...
