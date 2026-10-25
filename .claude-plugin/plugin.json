@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -57,6 +57,30 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "minCallChars": {
+      "type": "number",
+      "title": "Minimum call size",
+      "description": "Tool calls whose input plus output are shorter than this many characters are kept without asking Jev.",
+      "default": 1000
+    },
+    "backend": {
+      "type": "string",
+      "title": "Backend",
+      "description": "Who answers the keep questions: \"jev\" (TypeSafe API) or \"local\" (an Ollama model on this machine; free and offline, slower and less accurate).",
+      "default": "jev"
+    },
+    "localModel": {
+      "type": "string",
+      "title": "Local model",
+      "description": "Ollama model used when backend is \"local\".",
+      "default": "qwen2.5:3b"
+    },
+    "localUrl": {
+      "type": "string",
+      "title": "Local model URL",
+      "description": "Ollama server used when backend is \"local\".",
+      "default": "http://localhost:11434"
     }
   }
 }

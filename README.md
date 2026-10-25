@@ -110,6 +110,13 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `minCallChars` | `0` | Calls with fewer input plus result characters are kept without asking |
+| `dropSupersededReads` | `false` | Truncate a Read's result without asking when the same Read runs again later |
+| `minReductionRatio` | `0` | Make no request when dropping every candidate could not reach this reduction |
+
+`LocalClient` answers the same questions with a local
+[Ollama](https://ollama.com) model (`qwen2.5:3b` by default) and can be passed
+to `compact` in place of a `JevClient`.
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting

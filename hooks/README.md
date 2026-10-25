@@ -56,14 +56,41 @@ The plugin declares these `userConfig` values in
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
+| `minCallChars` | `1000` |
+| `backend` | `jev` |
+| `localModel` | `qwen2.5:3b` |
+| `localUrl` | `http://localhost:11434` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
+Every option except `apiKey`, `compactAtPercent`, `model` and the `backend`
+options is passed straight to the library; see the root README for what they
+do. The hook also turns on `dropSupersededReads`.
+
+Jev is asked only where its answer can change the outcome. Reads repeated
+later with the same input are truncated by rule, calls under `minCallChars`
+are kept, and when dropping every remaining candidate still could not reach
+`minReductionRatio`, no request is made at all and the hook falls back
+straight away.
+
+### Local backend
+
+Set `backend` to `local` to answer the same questions with a model served by
+[Ollama](https://ollama.com) instead of the TypeSafe API. No key is needed and
+nothing leaves the machine, but a small local model is slower than Jev and its
+probabilities are rougher, so expect more conservative or noisier decisions.
+
+```sh
+brew install ollama
+ollama serve            # or run the Ollama app
+ollama pull qwen2.5:3b  # about 2 GB; fits an 8 GB Mac
+```
+
+The context window requested from Ollama is `maxRequestTokens` plus 1024,
+rounded up to 1024. On a machine with little memory, lower `maxStateTokens`
+and `maxRequestTokens` (for example to `8000` and `10000`). The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
 fitted into the state budget, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's

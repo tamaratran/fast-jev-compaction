@@ -21,6 +21,9 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  minCallChars: 0,
+  dropSupersededReads: false,
+  minReductionRatio: 0,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,7 +52,46 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    minCallChars: Math.max(0, finite(options.minCallChars, DEFAULT_OPTIONS.minCallChars)),
+    dropSupersededReads: options.dropSupersededReads ?? DEFAULT_OPTIONS.dropSupersededReads,
+    minReductionRatio: Math.max(
+      0,
+      finite(options.minReductionRatio, DEFAULT_OPTIONS.minReductionRatio),
+    ),
   };
+}
+
+/** Characters a call holds: its serialised input plus its result. */
+export function callChars(call: Pick<ToolCall, 'input' | 'resultChars'>): number {
+  let input = 20;
+  try {
+    input = JSON.stringify(call.input).length;
+  } catch {
+    // keep the estimate
+  }
+  return input + call.resultChars;
+}
+
+/**
+ * Ids of Read calls run again later with the same input: the later result is
+ * the current one, so the earlier one can be truncated without asking Jev.
+ */
+export function supersededReads(calls: readonly ToolCall[]): Set<string> {
+  const superseded = new Set<string>();
+  const latest = new Map<string, string>();
+  for (const call of calls) {
+    if (call.tool !== 'Read' || call.isError) continue;
+    let key: string;
+    try {
+      key = JSON.stringify(call.input);
+    } catch {
+      continue;
+    }
+    const earlier = latest.get(key);
+    if (earlier) superseded.add(earlier);
+    latest.set(key, call.id);
+  }
+  return superseded;
 }
 
 /** The two `noul` questions asked about one call: keep the call, keep its result. */
@@ -253,6 +295,10 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
  * stay. The whole history (results omitted, fitted into `maxStateTokens`) is
  * sent as state with every batch of questions. Throws when Jev fails or the
  * history cannot be fitted; the caller decides whether to fall back.
+ *
+ * Jev is only asked where its answer can matter: superseded Reads are
+ * truncated by rule, calls under `minCallChars` are kept, and nothing is asked
+ * when dropping every remaining candidate could not reach `minReductionRatio`.
  */
 export async function compact(
   messages: readonly Message[],
@@ -262,13 +308,24 @@ export async function compact(
   const started = Date.now();
   const resolved = resolveOptions(options);
   const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
-  const candidates = calls.filter((call) => !call.pinned);
+  const superseded = resolved.dropSupersededReads ? supersededReads(calls) : new Set<string>();
+  const candidates = calls.filter(
+    (call) =>
+      !call.pinned && !superseded.has(call.id) && callChars(call) >= resolved.minCallChars,
+  );
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
+  const reachable =
+    candidates.reduce((sum, call) => sum + callChars(call), 0) +
+    calls
+      .filter((call) => !call.pinned && superseded.has(call.id))
+      .reduce((sum, call) => sum + Math.max(0, call.resultChars - resolved.truncateHeadChars), 0);
+  const worthAsking = charsBefore > 0 && reachable / charsBefore >= resolved.minReductionRatio;
 
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
   let batches: ToolCall[][] = [];
   const answers = new Map<string, CallAnswer>();
-  if (candidates.length > 0) {
+  if (candidates.length > 0 && !worthAsking) fitted = { tokens: 0, stage: 'skipped' };
+  else if (candidates.length > 0) {
     const state = fitState(messages, calls, resolved);
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
@@ -278,9 +335,16 @@ export async function compact(
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }
 
-  const decisions = calls.map((call) =>
-    decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
-  );
+  const decisions = calls.map((call): CallDecision => {
+    const answer = answers.get(call.id);
+    if (call.pinned || answer) {
+      return decideCall(call, answer ?? { keepCall: 1, keepResult: 1 }, resolved);
+    }
+    const base = { id: call.id, tool: call.tool, keepCall: 1 };
+    return superseded.has(call.id)
+      ? { ...base, keepResult: 0, action: 'drop_result', reason: 'superseded' }
+      : { ...base, keepResult: 1, action: 'keep', reason: 'unasked' };
+  });
   const kept = applyDecisions(
     messages,
     decisions,
@@ -300,6 +364,8 @@ export async function compact(
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
       pinned: count(decisions, 'pinned'),
+      superseded: count(decisions, 'superseded'),
+      unasked: count(decisions, 'unasked'),
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
       requests: batches.length,

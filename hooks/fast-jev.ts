@@ -9,6 +9,7 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
+import { buildLocalRequest, DEFAULT_LOCAL_MODEL, OLLAMA_URL, parseLocalResponse } from '../src/local.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
 import type {
   CompactOptions,
@@ -23,7 +24,14 @@ const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  backend: 'jev' as Backend,
+  localModel: DEFAULT_LOCAL_MODEL,
+  localUrl: OLLAMA_URL,
+  minCallChars: 1000,
 };
+
+/** Who answers the questions: TypeSafe's Jev, or a local Ollama model. */
+export type Backend = 'jev' | 'local';
 
 export type HookFetchInit = {
   method?: string;
@@ -45,6 +53,9 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  backend: Backend;
+  localModel: string;
+  localUrl: string;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -66,11 +77,14 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
+    'minCallChars',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
   const config: HookConfig = {
+    minCallChars: HOOK_DEFAULTS.minCallChars,
+    dropSupersededReads: true,
     ...numbers,
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
     minReductionRatio: optionNumber(
@@ -79,6 +93,9 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    backend: optionString(options, 'backend') === 'local' ? 'local' : HOOK_DEFAULTS.backend,
+    localModel: optionString(options, 'localModel') ?? HOOK_DEFAULTS.localModel,
+    localUrl: optionString(options, 'localUrl') ?? HOOK_DEFAULTS.localUrl,
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -98,6 +115,21 @@ export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): Jev
         body: request.body,
       });
       return parseJevResponse(response.status, response.ok, response.text);
+    },
+  };
+}
+
+/** A `JevAsker` over the engine's `$.http.fetch` that asks a local Ollama model. */
+export function localAsker(fetchFn: HookFetch, baseUrl: string, model: string, numCtx: number): JevAsker {
+  return {
+    async ask(state, questions) {
+      const request = buildLocalRequest({ baseUrl, model, numCtx }, state, questions);
+      const response = await fetchFn(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      });
+      return parseLocalResponse(response.status, response.ok, response.text, questions);
     },
   };
 }
@@ -161,14 +193,25 @@ export type SessionCompaction = {
   messages: SessionMessage[];
 };
 
-/** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
+/**
+ * Runs the library over a session transcript; throws when the Jev key is
+ * missing or the backend fails.
+ */
 export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  let asker: JevAsker;
+  if (config.backend === 'local') {
+    // Room for the state, one batch of questions and the answer.
+    const numCtx = Math.ceil((resolveOptions(config).maxRequestTokens + 1024) / 1024) * 1024;
+    asker = localAsker(fetchFn, config.localUrl, config.localModel, numCtx);
+  } else {
+    if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
+    asker = jevAsker(fetchFn, config.apiKey, config.model);
+  }
+  const result = await compact(messages, asker, config);
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -183,10 +226,14 @@ export function summarize(result: CompactResult): string {
     stats.resultsDropped > 0 ? `${stats.resultsDropped} results truncated` : '',
     stats.callsDropped > 0 ? `${stats.callsDropped} call_dropped` : '',
     stats.pinned > 0 ? `${stats.pinned} pinned` : '',
+    stats.superseded > 0 ? `${stats.superseded} superseded` : '',
+    stats.unasked > 0 ? `${stats.unasked} unasked` : '',
   ].filter(Boolean);
-  return `${percent(reductionRatio(result))} reduction; ${
-    parts.join(', ') || 'no tool calls'
-  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)`;
+  const asked =
+    stats.stateStage === 'skipped'
+      ? 'nothing asked: too little to gain'
+      : `state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)`;
+  return `${percent(reductionRatio(result))} reduction; ${parts.join(', ') || 'no tool calls'}; ${asked}`;
 }
 
 const UI_LOG_MAX_CHARS = 4096;
@@ -262,7 +309,10 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const config =
+        configured.backend === 'local'
+          ? configured
+          : { ...configured, apiKey: await getApiKey($, configured) };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };

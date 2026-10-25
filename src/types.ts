@@ -60,7 +60,12 @@ export interface CallDecision extends CallAnswer {
   id: string;
   tool: string;
   action: CallAction;
-  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';
+  /**
+   * `superseded` and `unasked` are decided without Jev: a Read repeated later
+   * with the same input, and a call too small (or a history with too little to
+   * gain) to be worth a question.
+   */
+  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped' | 'superseded' | 'unasked';
 }
 
 export interface HistoryToolCall {
@@ -105,6 +110,12 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /** Calls whose input plus result are shorter than this are kept without asking. Default 0. */
+  minCallChars?: number;
+  /** Truncate a Read's result, without asking, when the same Read runs again later. Default false. */
+  dropSupersededReads?: boolean;
+  /** Skip Jev entirely when even dropping every candidate could not reach this reduction. Default 0. */
+  minReductionRatio?: number;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +125,9 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  minCallChars: number;
+  dropSupersededReads: boolean;
+  minReductionRatio: number;
 }
 
 export interface CompactResult {
@@ -130,8 +144,10 @@ export interface CompactResult {
     resultsDropped: number;
     callsDropped: number;
     pinned: number;
+    superseded: number;
+    unasked: number;
     stateTokens: number;
-    /** Which fitting stage the state needed, '' when no request was made. */
+    /** Which fitting stage the state needed; '' when nothing was asked, 'skipped' when too little could be gained. */
     stateStage: string;
     requests: number;
     ms: number;

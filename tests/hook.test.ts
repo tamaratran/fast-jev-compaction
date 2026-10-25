@@ -53,7 +53,12 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+      backend: 'jev', localModel: 'qwen2.5:3b', localUrl: 'http://localhost:11434', minCallChars: 1000, dropSupersededReads: true,
+    });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -64,7 +69,14 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      backend: 'jev', localModel: 'qwen2.5:3b', localUrl: 'http://localhost:11434', minCallChars: 1000, dropSupersededReads: true,
     });
+    expect(resolveHookConfig({ backend: 'local', localModel: 'llama3.2:3b', minCallChars: 0 })).toMatchObject({
+      backend: 'local',
+      localModel: 'llama3.2:3b',
+      minCallChars: 0,
+    });
+    expect(resolveHookConfig({ backend: 'cloud' }).backend).toBe('jev');
   });
 });
 
@@ -112,7 +124,7 @@ describe('session message mapping', () => {
 describe('compactSession', () => {
   it('runs the library over the engine fetch and reports the outcome', async () => {
     const bodies: string[] = [];
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k', model: 'jev-x' };
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1, minCallChars: 0 }), apiKey: 'k', model: 'jev-x' };
     const { result: output, messages } = await compactSession(
       transcript(),
       config,
@@ -128,7 +140,7 @@ describe('compactSession', () => {
   });
 
   it('splits a long decision log into ui.log lines under the host limit', async () => {
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1, minCallChars: 0 }), apiKey: 'k' };
     const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1));
     const lines = decisionLogLines(output, 60);
     expect(lines).toEqual([
@@ -139,8 +151,47 @@ describe('compactSession', () => {
     expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);
   });
 
+  it('asks only about calls big enough to matter', async () => {
+    const bodies: string[] = [];
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1, minReductionRatio: 0 }), apiKey: 'k' };
+    const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1, bodies));
+    expect(Object.keys(JSON.parse(bodies[0]!).questions)).toEqual(['call_t1', 'result_t1']);
+    expect(output.decisions.map((d) => d.reason)).toEqual(['call_dropped', 'unasked']);
+    expect(summarize(output)).toMatch(/1 call_dropped, 1 unasked; state ~\d+ tokens/);
+  });
+
+  it('skips the request when too little could be gained', async () => {
+    const bodies: string[] = [];
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1, minReductionRatio: 0.99 }), apiKey: 'k' };
+    const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1, bodies));
+    expect(bodies).toHaveLength(0);
+    expect(summarize(output)).toBe('0% reduction; 2 unasked; nothing asked: too little to gain');
+  });
+
+  it('asks a local Ollama model without a key', async () => {
+    const requests: { url: string; body: Record<string, any> }[] = [];
+    const config = resolveHookConfig({ preserveRecentMessages: 1, minCallChars: 0, backend: 'local', maxRequestTokens: 7000 });
+    const { result: output } = await compactSession(transcript(), config, async (url, init) => {
+      const body = JSON.parse(init?.body ?? '{}');
+      requests.push({ url, body });
+      const content = Object.fromEntries(Object.keys(body.format.properties).map((name) => [name, name === 'call_t2' || name === 'result_t2' ? 1.4 : 0.1]));
+      return { status: 200, ok: true, text: JSON.stringify({ message: { content: JSON.stringify(content) } }) };
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe('http://localhost:11434/api/chat');
+    expect(requests[0]!.body).toMatchObject({ model: 'qwen2.5:3b', stream: false, options: { temperature: 0, num_ctx: 8192 } });
+    expect(requests[0]!.body.format.required).toEqual(['call_t1', 'result_t1', 'call_t2', 'result_t2']);
+    expect(decisionLog(output)).toBe('t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=1.00/result=1.00');
+    await expect(
+      compactSession(transcript(), config, async () => ({ status: 200, ok: true, text: JSON.stringify({ message: { content: '{}' } }) })),
+    ).rejects.toThrow(/no probability for call_t1/);
+    await expect(
+      compactSession(transcript(), config, async () => ({ status: 404, ok: false, text: 'model not found' })),
+    ).rejects.toThrow(/local model request failed \(404\)/);
+  });
+
   it('throws on a missing key and on failed requests so the hook falls back', async () => {
-    const config = resolveHookConfig({ preserveRecentMessages: 1 });
+    const config = resolveHookConfig({ preserveRecentMessages: 1, minCallChars: 0 });
     await expect(compactSession(transcript(), config, jevFetch(() => 0))).rejects.toThrow(/TYPESAFE_API_KEY/);
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),

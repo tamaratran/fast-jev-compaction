@@ -10,6 +10,7 @@ import {
   estimateTokens,
   fitState,
   JevClient,
+  LocalClient,
   parseJevResponse,
   reductionRatio,
   resolveOptions,
@@ -379,6 +380,47 @@ describe('compact', () => {
     expect(reductionRatio(output)).toBe(0);
   });
 
+  it('truncates a Read run again later without asking about it', async () => {
+    const seen: Seen[] = [];
+    const messages = [
+      ...transcript().slice(0, -1),
+      call('tool-4', 'Read', { file_path: 'src/a.ts' }, fileA),
+      result('tool-4', fileA),
+      message('user', 'go ahead'),
+    ];
+    const output = await compact(messages, fakeJev(() => 0.9, seen), {
+      preserveRecentMessages: 1,
+      dropSupersededReads: true,
+    });
+    expect(seen.flatMap((r) => r.questions)).not.toContain('result_t1');
+    expect(output.decisions.map((d) => [d.id, d.reason])).toEqual([
+      ['t1', 'superseded'],
+      ['t2', 'kept'],
+      ['t3', 'kept'],
+      ['t4', 'kept'],
+    ]);
+    expect(output.messages[2]!.toolResults![0]!.text).toMatch(/truncated .* chars/);
+    expect(output.stats).toMatchObject({ superseded: 1, unasked: 0 });
+  });
+
+  it('skips small calls and skips Jev when too little could be gained', async () => {
+    const seen: Seen[] = [];
+    const small = await compact(transcript(), fakeJev(() => 0.1, seen), {
+      preserveRecentMessages: 1,
+      minCallChars: 500,
+    });
+    expect(seen.flatMap((r) => r.questions).sort()).toEqual(['call_t1', 'call_t2', 'result_t1', 'result_t2']);
+    expect(small.decisions.find((d) => d.id === 't3')).toMatchObject({ action: 'keep', reason: 'unasked' });
+
+    const skipped = await compact(transcript(), fakeJev(() => 0.1, seen), {
+      preserveRecentMessages: 1,
+      minReductionRatio: 0.99,
+    });
+    expect(seen).toHaveLength(1);
+    expect(skipped.stats).toMatchObject({ requests: 0, stateStage: 'skipped', unasked: 3 });
+    expect(reductionRatio(skipped)).toBe(0);
+  });
+
   it('rejects malformed answers', async () => {
     const broken: JevAsker = {
       ask: async () => ({ answers: { call_t1: { noul: 0.5 } } }),
@@ -429,5 +471,26 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('local client', () => {
+  it('asks Ollama for one probability per question and clamps the answers', async () => {
+    const calls: { url: string; body: any }[] = [];
+    const client = new LocalClient({
+      model: 'm',
+      fetch: (async (url: string, init: { body: string }) => {
+        const body = JSON.parse(init.body);
+        calls.push({ url, body });
+        const content = Object.fromEntries(
+          body.format.required.map((name: string) => [name, name === 'call_t1' ? -0.2 : 0.4]),
+        );
+        return new Response(JSON.stringify({ message: { content: JSON.stringify(content) } }));
+      }) as unknown as typeof fetch,
+    });
+    const output = await compact(transcript(), client, { preserveRecentMessages: 1, minCallChars: 500, dropSupersededReads: true });
+    expect(calls[0]!.url).toBe('http://localhost:11434/api/chat');
+    expect(calls[0]!.body.model).toBe('m');
+    expect(output.decisions[0]).toMatchObject({ keepCall: 0, keepResult: 0.4 });
   });
 });

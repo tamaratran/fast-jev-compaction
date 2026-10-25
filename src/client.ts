@@ -1,3 +1,4 @@
+import { buildLocalRequest, parseLocalResponse } from './local.js';
 import { buildJevRequest, parseJevResponse } from './request.js';
 import type { JevAsker, JevQuestions, JevResponse, JevState } from './types.js';
 
@@ -39,5 +40,31 @@ export class JevClient implements JevAsker {
       body: request.body,
     });
     return parseJevResponse(response.status, response.ok, await response.text());
+  }
+}
+
+export interface LocalClientOptions {
+  /** Defaults to `http://localhost:11434`. */
+  baseUrl?: string;
+  /** Defaults to `qwen2.5:3b`. */
+  model?: string;
+  /** Context window for the model; Ollama's default is too small for most states. */
+  numCtx?: number;
+  /** Defaults to the global `fetch`. */
+  fetch?: typeof fetch;
+}
+
+/** Answers Jev questions with a local Ollama model: free and offline, but slower and rougher. */
+export class LocalClient implements JevAsker {
+  constructor(private readonly options: LocalClientOptions = {}) {}
+
+  async ask(state: JevState, questions: JevQuestions): Promise<JevResponse> {
+    const request = buildLocalRequest(this.options, state, questions);
+    const response = await (this.options.fetch ?? fetch)(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+    });
+    return parseLocalResponse(response.status, response.ok, await response.text(), questions);
   }
 }
