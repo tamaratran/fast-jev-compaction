@@ -403,6 +403,13 @@ describe('HTTP client', () => {
     });
   });
 
+  it('replaces lone surrogates left by truncation', () => {
+    const cut = 'box 📦'.slice(0, 5);
+    const request = buildJevRequest({ apiKey: 'k' }, { text: cut, emoji: '📦' }, {});
+    expect(request.body).not.toMatch(/\\ud[89a-f]/i);
+    expect(JSON.parse(request.body).state).toEqual({ text: 'box \uFFFD', emoji: '📦' });
+  });
+
   it('rejects failed and malformed responses', () => {
     expect(() => parseJevResponse(500, false, 'boom')).toThrow(/500/);
     expect(() => parseJevResponse(200, true, 'not json')).toThrow(/malformed/);

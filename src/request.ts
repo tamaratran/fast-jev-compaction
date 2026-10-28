@@ -10,6 +10,13 @@ export interface JevRequest {
   body: string;
 }
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** Truncation can split a surrogate pair; Jev rejects lone surrogates with 400. */
+function wellFormed(_key: string, value: unknown): unknown {
+  return typeof value === 'string' ? value.replace(LONE_SURROGATE, '\uFFFD') : value;
+}
+
 /** The HTTP request for one Jev call, for any fetch-like transport. */
 export function buildJevRequest(
   params: {
@@ -31,7 +38,7 @@ export function buildJevRequest(
       model: params.model ?? DEFAULT_MODEL,
       state,
       questions,
-    }),
+    }, wellFormed),
   };
 }
 
