@@ -57,6 +57,12 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "verbose": {
+      "type": "boolean",
+      "title": "Log per-call decisions",
+      "description": "Writes Jev's keep/drop decision for every tool call to the transcript after each compaction. The one-line outcome is always shown.",
+      "default": false
     }
   }
 }
