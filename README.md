@@ -1,5 +1,7 @@
 # fast-jev-compaction
 
+FlintWave fork — defaults to local [Ollama decision models](https://ollama.com/search?c=decision) instead of the TypeSafe cloud API. Upstream: [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
+
 Claude Code plugin that replaces the compaction summary with Jev decisions:
 every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
@@ -60,7 +62,10 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 
 ```sh
 npm install fast-jev-compaction
-export TYPESAFE_API_KEY=...
+# Requires Ollama 0.35+ with a decision model:
+ollama pull tev1
+# Or, to use the TypeSafe cloud API instead:
+# export TYPESAFE_API_KEY=...
 ```
 
 ```ts
@@ -100,9 +105,9 @@ put it in a source file.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
-| `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
+| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key; not needed when `baseUrl` points to localhost |
+| `model` | `tev1` | Decision model name (Ollama: `tev1`, `tev1:0.8b`, `clef`; TypeSafe: `jev-latest`) |
+| `baseUrl` | `http://localhost:11434/v1/systemone` | System One endpoint |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
@@ -139,24 +144,28 @@ Function hooks are an early-access Claude Code feature (2.1.274+), so the
 opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.json`:
 
 ```json
-{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1", "TYPESAFE_API_KEY": "<your key>" } }
+{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1" } }
 ```
 
 Then add this repository as a plugin marketplace and install the plugin,
 either from the shell or as slash commands inside a session:
 
 ```sh
-claude plugin marketplace add tamaratran/fast-jev-compaction
+claude plugin marketplace add FlintWave/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
 
-The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
-…); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
+The install prompts for the plugin options (thresholds, `truncateHeadChars`,
+…); leave them at their defaults to use the local Ollama endpoint.
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
 auto-compaction) goes through Jev: the toast reads
 `fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
 replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
 could not remove enough (short sessions, or when it fails).
+
+To use the TypeSafe cloud API instead of local Ollama, set `TYPESAFE_API_KEY`
+in env and optionally set model to `jev-latest` and baseUrl to
+`https://api.typesafe.ai/v1/systemone`.
 
 To run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .`
 from the repository root. No publishing step is required; the marketplace is
@@ -170,7 +179,7 @@ npm run typecheck        # library + hook
 npm test
 npm run build
 npm run validate:plugin  # claude plugin validate
-TYPESAFE_API_KEY="$(cat ~/.typesafe_key)" npm run demo
+npm run demo  # uses local Ollama by default; set TYPESAFE_API_KEY to use the cloud API
 ```
 
 The unit tests use a fake Jev and never contact TypeSafe. The demo is the live

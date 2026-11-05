@@ -29,9 +29,7 @@ hooks surface before installing or loading it:
 
 ```sh
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
-export TYPESAFE_API_KEY="<your TypeSafe key>"
-
-claude plugin marketplace add tamaratran/fast-jev-compaction
+claude plugin marketplace add FlintWave/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
 
@@ -55,11 +53,12 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
-| `model` | `jev-latest` |
+| `model` | `tev1` |
+| `baseUrl` | `http://localhost:11434/v1/systemone` |
 
-The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
-through `TYPESAFE_API_KEY`. The environment variable is the recommended
-development setup.
+When `baseUrl` points to localhost, no API key is needed. For the TypeSafe
+cloud API, supply the key as the sensitive `apiKey` plugin option or through
+`TYPESAFE_API_KEY`.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
