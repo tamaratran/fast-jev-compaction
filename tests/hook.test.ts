@@ -154,4 +154,12 @@ describe('compactSession', () => {
     const { result } = await compactSession(transcript(), config, jevFetch(() => 0.1));
     expect(result.stats.calls).toBeGreaterThan(0);
   });
+
+  it('treats 127.0.0.1 and [::1] as local endpoints that skip the apiKey requirement', async () => {
+    for (const host of ['http://127.0.0.1:11434/v1/systemone', 'http://[::1]:11434/v1/systemone']) {
+      const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), baseUrl: host };
+      const { result } = await compactSession(transcript(), config, jevFetch(() => 0.1));
+      expect(result.stats.calls).toBeGreaterThan(0);
+    }
+  });
 });

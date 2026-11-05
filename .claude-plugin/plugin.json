@@ -61,7 +61,8 @@
     "baseUrl": {
       "type": "string",
       "title": "Jev endpoint URL",
-      "description": "Override the TypeSafe System One endpoint. Set to a local Ollama URL to avoid the TypeSafe API. Default: http://localhost:11434/v1/systemone"
+      "description": "Override the TypeSafe System One endpoint. Set to a local Ollama URL to avoid the TypeSafe API.",
+      "default": "http://localhost:11434/v1/systemone"
     }
   }
 }

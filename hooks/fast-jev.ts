@@ -170,7 +170,8 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  const apiKey = config.apiKey || (config.baseUrl && /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(config.baseUrl) ? 'local' : '');
+  const isLocal = config.baseUrl && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(config.baseUrl);
+  const apiKey = config.apiKey || (isLocal ? 'local' : '');
   if (!apiKey) throw new Error('TYPESAFE_API_KEY is not configured (set apiKey or use a local baseUrl)');
   const result = await compact(messages, jevAsker(fetchFn, apiKey, config.model, config.baseUrl), config);
   return { result, messages: toSessionMessages(messages, result.messages) };
