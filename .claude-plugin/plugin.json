@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.3.1-flintwave.1",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -55,8 +55,14 @@
     "model": {
       "type": "string",
       "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
-      "default": "jev-latest"
+      "description": "Decision model name. Use a TypeSafe Jev model or a local Ollama decision model (e.g. tev1, tev1:0.8b, clef).",
+      "default": "tev1"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Jev endpoint URL",
+      "description": "Override the TypeSafe System One endpoint. Set to a local Ollama URL to avoid the TypeSafe API.",
+      "default": "http://localhost:11434/v1/systemone"
     }
   }
 }

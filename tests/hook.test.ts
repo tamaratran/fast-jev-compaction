@@ -53,11 +53,12 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({ baseUrl: 'http://localhost:11434/v1/systemone', compactAtPercent: 60, minReductionRatio: 0.25, model: 'tev1' });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no', baseUrl: 'https://api.typesafe.ai/v1/systemone' }),
     ).toEqual({
       apiKey: 'k',
+      baseUrl: 'https://api.typesafe.ai/v1/systemone',
       keepThreshold: 0.3,
       maxStateTokens: 1000,
       model: 'jev-x',
@@ -141,9 +142,24 @@ describe('compactSession', () => {
 
   it('throws on a missing key and on failed requests so the hook falls back', async () => {
     const config = resolveHookConfig({ preserveRecentMessages: 1 });
-    await expect(compactSession(transcript(), config, jevFetch(() => 0))).rejects.toThrow(/TYPESAFE_API_KEY/);
+    const remoteConfig = { ...config, baseUrl: 'https://api.typesafe.ai/v1/systemone' };
+    await expect(compactSession(transcript(), remoteConfig, jevFetch(() => 0))).rejects.toThrow(/TYPESAFE_API_KEY/);
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+
+  it('uses a placeholder apiKey for localhost baseUrl without TYPESAFE_API_KEY', async () => {
+    const config = resolveHookConfig({ preserveRecentMessages: 1 });
+    const { result } = await compactSession(transcript(), config, jevFetch(() => 0.1));
+    expect(result.stats.calls).toBeGreaterThan(0);
+  });
+
+  it('treats 127.0.0.1 and [::1] as local endpoints that skip the apiKey requirement', async () => {
+    for (const host of ['http://127.0.0.1:11434/v1/systemone', 'http://[::1]:11434/v1/systemone']) {
+      const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), baseUrl: host };
+      const { result } = await compactSession(transcript(), config, jevFetch(() => 0.1));
+      expect(result.stats.calls).toBeGreaterThan(0);
+    }
   });
 });

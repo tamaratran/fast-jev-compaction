@@ -1,7 +1,7 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.2.0",
-  "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model.",
+  "version": "0.3.1-flintwave.1",
+  "description": "Verbatim Jev-guided context compaction — defaults to local Ollama decision models.",
   "type": "module",
   "license": "MIT",
   "engines": {
