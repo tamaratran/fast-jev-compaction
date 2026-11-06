@@ -15,7 +15,7 @@ triggers compaction proactively when the threshold is reached.
 ## Install
 
 ```sh
-claude plugin marketplace add kaineone/metzger
+claude plugin marketplace add FlintWave/metzger
 claude plugin install metzger@metzger
 ```
 

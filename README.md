@@ -55,7 +55,7 @@ about a second to load and scores a full conversation in a few seconds.
 ### 3. Install the plugin
 
 ```sh
-claude plugin marketplace add kaineone/metzger
+claude plugin marketplace add FlintWave/metzger
 claude plugin install metzger@metzger
 ```
 
@@ -221,7 +221,7 @@ fork switched the default from the TypeSafe cloud API to locally-served models,
 trained purpose-built scoring models (the Metzger family), added a chat-API
 backend for distilled models, added automatic Ollama health checks, and
 optimized for low-resource machines. It's now maintained by
-[kaineone](https://github.com/kaineone).
+[FlintWave](https://github.com/FlintWave).
 
 ## License
 
