@@ -1,15 +1,15 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "metzger",
   "owner": {
-    "name": "tamaratran",
-    "url": "https://github.com/tamaratran"
+    "name": "kaineone",
+    "url": "https://github.com/kaineone"
   },
   "plugins": [
     {
-      "name": "fast-jev-compaction",
+      "name": "metzger",
       "source": "./",
-      "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
-      "version": "0.3.0",
+      "description": "Context compaction for Claude Code — a small local model scores each message and cuts what's dead.",
+      "version": "0.4.0",
       "license": "MIT"
     }
   ]

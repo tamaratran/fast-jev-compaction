@@ -1,7 +1,7 @@
 {
-  "name": "fast-jev-compaction",
-  "version": "0.3.1-flintwave.1",
-  "description": "Verbatim Jev-guided context compaction — defaults to local Ollama decision models.",
+  "name": "metzger",
+  "version": "0.4.0",
+  "description": "Context compaction for Claude Code — a small local model scores each message and cuts what's dead.",
   "type": "module",
   "license": "MIT",
   "engines": {

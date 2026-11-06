@@ -24,7 +24,7 @@ const HOOK_DEFAULTS = {
   baseUrl: 'http://localhost:11434/v1/systemone',
   compactAtPercent: 60,
   minReductionRatio: 0.25,
-  model: 'tev1',
+  model: 'metzger:0.8b',
 };
 
 export type HookFetchInit = {
@@ -292,9 +292,67 @@ function notify(
   $.ui.toast(text, { timeoutMs: 15_000 });
 }
 
+async function checkOllamaModel(
+  fetchFn: HookFetch,
+  baseUrl: string,
+  model: string,
+): Promise<{ ollamaUp: boolean; modelPulled: boolean }> {
+  const ollamaBase = baseUrl.replace(/\/v1\/systemone\/?$/, '');
+  try {
+    const resp = await fetchFn(`${ollamaBase}/api/tags`);
+    if (!resp.ok) return { ollamaUp: false, modelPulled: false };
+    const data = JSON.parse(resp.text) as { models?: { name?: string }[] };
+    const names = (data.models ?? []).map((m) => m.name ?? '');
+    const pulled = names.some(
+      (n) => n === model || n === `${model}:latest` || n.startsWith(`${model}:`) || model.includes(':') && n === model.replace(/:/, ':'),
+    );
+    return { ollamaUp: true, modelPulled: pulled };
+  } catch {
+    return { ollamaUp: false, modelPulled: false };
+  }
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  let setupChecked = false;
+
+  on('session.start', async ($, event, next) => {
+    const result = await next(event);
+
+    if (setupChecked) return result;
+    setupChecked = true;
+
+    const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(configured.baseUrl);
+    if (!isLocal) return result;
+
+    const { ollamaUp, modelPulled } = await checkOllamaModel(
+      async (url, init) => {
+        const r = await $.http.fetch(url, init);
+        return { status: r.status, ok: r.ok, text: r.text };
+      },
+      configured.baseUrl,
+      configured.model,
+    );
+
+    if (!ollamaUp) {
+      $.ui.toast(
+        'metzger: Ollama is not running. Install it from https://ollama.com then run: ollama pull kaineone/metzger:0.8b',
+        { timeoutMs: 30_000 },
+      );
+      return result;
+    }
+
+    if (!modelPulled) {
+      $.ui.toast(
+        `metzger: decision model "${configured.model}" not found. Run: ollama pull kaineone/${configured.model}`,
+        { timeoutMs: 30_000 },
+      );
+      return result;
+    }
+
+    return result;
+  });
 
   on('session.compact', async ($, event, next) => {
     try {

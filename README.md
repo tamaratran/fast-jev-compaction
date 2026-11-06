@@ -1,200 +1,228 @@
-# fast-jev-compaction
+# Metzger
 
-FlintWave fork — defaults to local [Ollama decision models](https://ollama.com/search?c=decision) instead of the TypeSafe cloud API. Upstream: [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
+Context compaction for Claude Code that doesn't lose anything important.
 
-Claude Code plugin that replaces the compaction summary with Jev decisions:
-every tool call and result is scored in one fast request, stale ones are
-dropped or truncated, everything kept stays verbatim. Also usable as an npm
-library.
+When Claude Code runs out of context, it normally summarizes old messages — and
+summaries are lossy. A file path, an exact error, a constraint you mentioned
+three turns ago: gone. Metzger takes a different approach. It runs a small, fast
+model locally on your machine that reads the whole conversation and scores every
+tool call for relevance. Stale ones get cut. Everything else stays word for word.
 
-## What and why
-
-Most context compaction asks an LLM to summarize old turns. A summary is
-lossy: a file path, exact error, constraint, or command can disappear even when
-it matters later. This library never rewrites anything. It only deletes tool
-calls and tool results Jev says are no longer needed, and it asks Jev while
-showing it the whole conversation. User and assistant text stays verbatim and
-in order.
-
-The repository is both an npm package (`src/`) and a Claude Code plugin
-(`hooks/`, `.claude-plugin/`) that uses the package to replace Claude Code's
-built-in compaction summary with the original messages.
+The name comes from the German word for butcher — someone who knows exactly
+where to cut and what to keep.
 
 ## How it works
 
-1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in
-   the first message or in the newest `preserveRecentMessages` messages are
-   pinned and never touched.
-2. The **state** sent to Jev is the whole conversation so far, oldest first,
-   with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
-   Tool inputs are included, texts are included, nothing is summarized.
-3. The state is fitted into `maxStateTokens` (25k by default) in stages, each
-   applied only if the previous one was not enough: tool inputs truncated to
-   1000, then 200, then 60 characters; long texts abridged to head + tail,
-   oldest non-pinned messages first; old non-pinned messages collapsed to a
-   `[… N chars omitted …]` note; old tool calls reduced to one line each
-   (`t12 Read file_path=src/a.ts → ok 480ch`); old call-less messages left
-   out; runs of old call-only messages folded into one entry. If it still
-   does not fit, compaction throws. Tokens are estimated without a tokenizer (a
-   word per six letters, half a token per digit, ~one per other symbol),
-   calibrated to land a little above the counts Jev reports.
-4. For every non-pinned call Jev gets two `noul` questions: should the **call**
-   stay (knowing it was made, with its input, still matters), and should the
-   **result** stay verbatim (its contents are still needed and re-running the
-   tool would not do).
-5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (30k by default, under Jev's 32k request
-   limit). The same full state is resent with every request; requests run
-   concurrently and their answers are merged.
-6. Decisions per call, against `keepThreshold`:
-   - `keepResult ≥ threshold` → keep call and result;
-   - else `keepCall ≥ threshold` → keep the call, truncate the result to its
-     first `truncateHeadChars` characters plus a one-line note;
-   - else → remove the call together with its result.
-7. The message list is rebuilt: a message that loses all its content is
-   removed, untouched messages are returned as the same objects, and no result
-   is ever left without its call.
+1. Your conversation fills up (or you run `/compact`).
+2. Metzger sends the full conversation to a tiny local model (under 1 GB) that
+   scores each tool call and result: is this still relevant to what we're doing?
+3. Calls that score above the threshold stay untouched. Calls below it get
+   trimmed or removed entirely.
+4. User and assistant text is **never** changed — only tool calls and their
+   outputs are candidates for removal.
 
-Jev failures, malformed answers, a missing key, or a history that cannot be
-fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
+The result: you keep the real messages, the actual code, the exact errors —
+just without the tool output you'll never look at again. No summaries, no
+rewrites, no paraphrasing.
 
-## Install and usage
+## Quick start
+
+### 1. Install Ollama
+
+Metzger needs [Ollama](https://ollama.com) to serve the scoring model locally.
 
 ```sh
-npm install fast-jev-compaction
-# Requires Ollama 0.35+ with a decision model:
-ollama pull tev1
-# Or, to use the TypeSafe cloud API instead:
-# export TYPESAFE_API_KEY=...
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# macOS
+brew install ollama
+
+# Windows — download from https://ollama.com/download
 ```
 
-```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';
+Verify it's running: `ollama --version` (requires 0.35+).
 
-const transcript: Message[] = [
-  { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },
-  {
-    role: 'assistant',
-    text: '',
-    toolUses: [{ tool_use_id: 'toolu_1', tool: 'Read', input: { file_path: 'src/a.ts' } }],
-  },
-  { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'toolu_1', text: '…file…' }] },
-  // …
-];
+### 2. Pull the model
 
-const result = await compactMessages(transcript, { preserveRecentMessages: 4 });
-console.log(result.messages, result.decisions, result.stats);
-if (reductionRatio(result) < 0.25) {
-  // not worth it: keep the original transcript, or summarize instead
+```sh
+ollama pull kaineone/metzger:0.8b
+```
+
+That's an 833 MB download. It runs comfortably on CPU — no GPU required. Takes
+about a second to load and scores a full conversation in a few seconds.
+
+### 3. Install the plugin
+
+```sh
+claude plugin marketplace add kaineone/metzger
+claude plugin install metzger@metzger
+```
+
+That's it. From now on, compaction (automatic or `/compact`) goes through
+Metzger. You'll see a toast like:
+
+```
+kept 42/67 messages, no summary (35% reduction; 18 kept, 7 results truncated…)
+```
+
+If Metzger can't cut enough (short sessions, or if Ollama is down), it falls
+back to Claude Code's built-in summary automatically.
+
+### First-run check
+
+When you start a session, Metzger pings Ollama to make sure it's running and
+the model is pulled. If something's missing, you'll see a toast with the exact
+command to fix it.
+
+## Models
+
+All Metzger models are fine-tuned from Qwen 3.5 for relevance scoring of
+conversation messages. They speak the Jev decision protocol.
+
+| Model | Params | Size | Quant | Notes |
+| --- | --- | --- | --- | --- |
+| `kaineone/metzger:0.8b` | 773M | 833 MB | Q8_0 | **Default.** Fast on CPU or GPU. Good accuracy for most sessions. |
+| `kaineone/metzger` | 4.3B | 4.6 GB | Q8_0 | Higher accuracy. Needs a GPU with 6+ GB VRAM; slow on CPU-only machines. |
+| `kaineone/metzger-distill:0.8b` | 752M | 1.5 GB | F16 | Distilled variant for the chat-API backend. Full precision. |
+| `kaineone/metzger-distill:0.8b-v2` | 752M | 1.5 GB | F16 | V2 of the distillation. Chat-API backend. |
+
+The 0.8b default is intentional — it loads in under a second, barely touches
+your VRAM, and won't freeze your machine during compaction. The 4.3B model is
+there if you want to trade speed for accuracy. To switch:
+
+```json
+{
+  "pluginConfigs": {
+    "metzger": {
+      "model": "kaineone/metzger"
+    }
+  }
 }
 ```
 
-`Message` is a subset of Claude Code's `SessionMessage`, so a session transcript
-can be passed in as is.
+## What it actually does to your messages
 
-To bring your own transport, implement `JevAsker` (one `ask(state, questions)`
-method) and call `compact(messages, asker, options)`; `buildJevRequest` and
-`parseJevResponse` give you the HTTP request body and response validation.
-The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
-`decideCall`, `applyDecisions`) are exported too.
+Here's a concrete example. Say you have a 67-message conversation where Claude
+read a bunch of files, ran some tests, hit errors, fixed them, and moved on.
+Metzger looks at the whole thing and might decide:
 
-`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
-put it in a source file.
+- The `Read` of `src/auth.ts` from 40 messages ago? You moved on to a
+  completely different file. **Cut.**
+- The failed `npm test` output from before the fix? You already fixed it.
+  **Cut.**
+- The `Read` of `src/config.ts` that you're still referencing? **Keep.**
+- The user's instruction "never edit anything under src/generated"? That's text,
+  not a tool call. **Always kept.**
+
+After Metzger runs, the conversation is shorter but nothing important is gone.
+Claude still has every instruction, every decision, every piece of code it's
+actively working with. It just doesn't have the `cat` output of a file you
+looked at once and never touched again.
+
+## Under the hood
+
+The scoring model gets the full conversation as context (with tool outputs
+replaced by short summaries to fit the token budget). For each tool call outside
+the pinned messages (first message + most recent N), it asks two questions:
+
+- **Should this call stay?** (knowing it was made, with its input, still matters)
+- **Should the result stay verbatim?** (the actual output is still needed and
+  re-running the tool wouldn't work)
+
+The answers are probabilities. Above `keepThreshold` (default 0.5), the item
+stays. Below it for the result but above for the call: the result is truncated
+to its first 300 characters plus a note. Below it for both: the whole thing is
+removed.
+
+If the conversation is long, the scoring is split across multiple requests
+(same full context, different batches of questions) that run concurrently.
 
 ## Options
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key; not needed when `baseUrl` points to localhost |
-| `model` | `tev1` | Decision model name (Ollama: `tev1`, `tev1:0.8b`, `clef`; TypeSafe: `jev-latest`) |
-| `baseUrl` | `http://localhost:11434/v1/systemone` | System One endpoint |
-| `fetch` | native `fetch` | Injectable fetch implementation for tests |
-| `goal` | last 3 user prompts | Ongoing task description included in the state |
-| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
-| `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
-| `maxStateTokens` | `25000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
-| `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+Set these in `~/.claude/settings.json` under `pluginConfigs.metzger`:
 
-`result.stats` reports message and character counts before and after, the
-per-reason decision counts, the state size in estimated tokens, which fitting
-stage was needed, and the number of requests.
+| Option | Default | What it does |
+| --- | --- | --- |
+| `model` | `metzger:0.8b` | Which scoring model to use |
+| `keepThreshold` | `0.5` | Probability cutoff — lower keeps more, higher cuts more aggressively |
+| `preserveRecentMessages` | `6` | Most recent messages that are never touched |
+| `compactAtPercent` | `60` | Context fill % that triggers automatic compaction |
+| `minReductionRatio` | `0.25` | Minimum reduction needed to use Metzger's output (otherwise falls back to built-in summary) |
+| `maxStateTokens` | `25000` | Token budget for the conversation context sent to the scorer |
+| `maxRequestTokens` | `30000` | Token budget per scoring request (context + questions) |
+| `truncateHeadChars` | `300` | Characters kept from a truncated tool result |
+| `baseUrl` | `http://localhost:11434/v1/systemone` | Scoring endpoint (change for TypeSafe cloud) |
+| `backend` | `auto` | `systemone` for Jev API, `chat` for Ollama chat API (distilled models), `auto` to detect |
+
+## TypeSafe cloud API (alternative)
+
+If you don't want to run a local model, you can use TypeSafe's hosted Jev API:
+
+```json
+{
+  "pluginConfigs": {
+    "metzger": {
+      "model": "jev-latest",
+      "baseUrl": "https://api.typesafe.ai/v1/systemone"
+    }
+  }
+}
+```
+
+Set your API key as `TYPESAFE_API_KEY` in your environment or as the `apiKey`
+plugin option.
+
+## npm library
+
+Metzger is also an npm package if you want to use the compaction logic in your
+own tools:
+
+```sh
+npm install metzger
+```
+
+```ts
+import { compactMessages, reductionRatio, type Message } from 'metzger';
+
+const result = await compactMessages(transcript, { preserveRecentMessages: 4 });
+console.log(result.messages, result.decisions, result.stats);
+```
+
+`Message` is a subset of Claude Code's `SessionMessage`, so a session transcript
+can be passed in directly.
 
 ## Limitations
 
-- Only tool calls and results are candidates; text messages are never removed
-  or shortened in the output (they are only abridged in the state Jev sees).
-- Token sizes are estimates from character counts, not a tokenizer.
-- Calibration is at the request level; a probability is not a proof that a
-  result is safe to delete. The assistant can always re-run the tool.
-- The full state is repeated with every request, so a history near the state
-  ceiling costs one request per handful of questions.
-
-## Claude Code plugin
-
-The repository root is a Claude Code function-hook plugin: `hooks/fast-jev.ts`
-is a thin adapter that feeds `session.compact` transcripts through `src/` and
-falls back to Claude Code's built-in summary on errors or insufficient
-reduction. See [`hooks/README.md`](hooks/README.md) for configuration and the
-Claude Code 2.1.274 type reference.
-
-### Install in Claude Code
-
-Function hooks are an early-access Claude Code feature (2.1.274+), so the
-opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.json`:
-
-```json
-{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1" } }
-```
-
-Then add this repository as a plugin marketplace and install the plugin,
-either from the shell or as slash commands inside a session:
-
-```sh
-claude plugin marketplace add FlintWave/fast-jev-compaction
-claude plugin install fast-jev-compaction@fast-jev-compaction
-```
-
-The install prompts for the plugin options (thresholds, `truncateHeadChars`,
-…); leave them at their defaults to use the local Ollama endpoint.
-Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
-auto-compaction) goes through Jev: the toast reads
-`fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
-replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
-could not remove enough (short sessions, or when it fails).
-
-To use the TypeSafe cloud API instead of local Ollama, set `TYPESAFE_API_KEY`
-in env and optionally set model to `jev-latest` and baseUrl to
-`https://api.typesafe.ai/v1/systemone`.
-
-To run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .`
-from the repository root. No publishing step is required; the marketplace is
-just the repo's `.claude-plugin/marketplace.json`.
+- Only tool calls and results are candidates for removal. Text messages are
+  never changed.
+- Token counts are estimated from character counts, not a tokenizer.
+- A probability score is not proof that something is safe to delete — but
+  Claude can always re-run the tool if it needs the output again.
+- The full conversation context is sent with every scoring request, so very long
+  sessions near the state ceiling cost more requests.
 
 ## Development
 
 ```sh
 npm install
-npm run typecheck        # library + hook
-npm test
+npm run typecheck
+npm test                  # 34 tests, all offline — no model needed
 npm run build
-npm run validate:plugin  # claude plugin validate
-npm run demo  # uses local Ollama by default; set TYPESAFE_API_KEY to use the cloud API
+npm run validate:plugin
+npm run demo              # live test against local Ollama
 ```
 
-The unit tests use a fake Jev and never contact TypeSafe. The demo is the live
-network check.
+## Origin
 
-## Animated demo (macOS)
+This started as a fork of [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction),
+which pioneered the idea of using Jev decisions for verbatim compaction. Our
+fork switched the default from the TypeSafe cloud API to locally-served models,
+trained purpose-built scoring models (the Metzger family), added a chat-API
+backend for distilled models, added automatic Ollama health checks, and
+optimized for low-resource machines. It's now maintained by
+[kaineone](https://github.com/kaineone).
 
-`demo/JevDemo` is a small native SwiftUI app that plays a scripted, dramatized
-version of the compaction flow inside a Claude Code-style terminal: the tool
-calls of a canned transcript are scored, results and calls Jev lets go turn red
-and collapse away, and the rest stays verbatim. It never calls the API; it
-exists to be screen recorded.
+## License
 
-```sh
-demo/JevDemo/build.sh   # builds demo/JevDemo/build/JevDemo.app and launches it
-```
-
-Press space in the app to replay from the start.
+MIT

@@ -1,7 +1,7 @@
 {
-  "name": "fast-jev-compaction",
-  "version": "0.3.1-flintwave.1",
-  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "name": "metzger",
+  "version": "0.4.0",
+  "description": "Context compaction for Claude Code — a small local model scores each message and cuts what's dead.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
@@ -55,8 +55,8 @@
     "model": {
       "type": "string",
       "title": "Jev model",
-      "description": "Decision model name. Use a TypeSafe Jev model or a local Ollama decision model (e.g. tev1, tev1:0.8b, clef).",
-      "default": "tev1"
+      "description": "Decision model name. Use a Metzger model (e.g. metzger:0.8b, metzger) or a TypeSafe Jev model (e.g. jev-latest).",
+      "default": "metzger:0.8b"
     },
     "baseUrl": {
       "type": "string",
