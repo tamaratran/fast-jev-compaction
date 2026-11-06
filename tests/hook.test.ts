@@ -7,6 +7,7 @@ import {
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
+import { ChatJevAsker } from '../src/chat-asker.js';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
 
 type SessionMessage = Message & { handle?: string };
@@ -53,7 +54,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ baseUrl: 'http://localhost:11434/v1/systemone', compactAtPercent: 60, minReductionRatio: 0.25, model: 'tev1' });
+    expect(resolveHookConfig({})).toEqual({ baseUrl: 'http://localhost:11434/v1/systemone', compactAtPercent: 60, minReductionRatio: 0.25, model: 'tev1', backend: 'auto' });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no', baseUrl: 'https://api.typesafe.ai/v1/systemone' }),
     ).toEqual({
@@ -65,6 +66,7 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      backend: 'auto',
     });
   });
 });
@@ -161,5 +163,81 @@ describe('compactSession', () => {
       const { result } = await compactSession(transcript(), config, jevFetch(() => 0.1));
       expect(result.stats.calls).toBeGreaterThan(0);
     }
+  });
+
+  it('uses ChatJevAsker for distill models in auto mode', async () => {
+    const urls: string[] = [];
+    const chatFetch = async (url: string, init?: { body?: string }) => {
+      urls.push(url);
+      const body = JSON.parse(init?.body ?? '{}');
+      const payload = JSON.parse(body.messages[1].content);
+      const keepOpt = payload.options.find((o: { key: string }) => o.key === 'true');
+      return {
+        status: 200,
+        ok: true,
+        text: JSON.stringify({ message: { content: keepOpt.label } }),
+      };
+    };
+    const config = {
+      ...resolveHookConfig({ preserveRecentMessages: 1 }),
+      model: 'tev1-distill:0.8b',
+      baseUrl: 'http://localhost:11434/v1/systemone',
+    };
+    const { result } = await compactSession(transcript(), config, chatFetch);
+    expect(urls.every(u => u === 'http://localhost:11434/api/chat')).toBe(true);
+    expect(result.decisions.filter(d => d.action === 'keep')).toHaveLength(result.stats.calls);
+  });
+});
+
+describe('ChatJevAsker', () => {
+  it('sends one chat request per noul question and maps A/B to probabilities', async () => {
+    const bodies: string[] = [];
+    const asker = new ChatJevAsker({
+      baseUrl: 'http://localhost:11434',
+      model: 'tev1-distill:0.8b',
+      fetch: async (_url, init) => {
+        bodies.push(init?.body ?? '');
+        const body = JSON.parse(init?.body ?? '{}');
+        const payload = JSON.parse(body.messages[1].content);
+        const dropOpt = payload.options.find((o: { key: string }) => o.key === 'false');
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({ message: { content: dropOpt.label } }),
+        };
+      },
+    });
+
+    const response = await asker.ask('test state', {
+      keep_call: { type: 'noul', instructions: 'Should this call be kept?' },
+      keep_result: { type: 'noul', instructions: 'Should this result be kept?' },
+    });
+
+    expect(bodies).toHaveLength(2);
+    expect(response.answers.keep_call).toEqual({ type: 'noul', noul: 0.0 });
+    expect(response.answers.keep_result).toEqual({ type: 'noul', noul: 0.0 });
+  });
+
+  it('returns 1.0 when the model picks the true/keep option', async () => {
+    const asker = new ChatJevAsker({
+      baseUrl: 'http://localhost:11434',
+      model: 'tev1-distill:0.8b',
+      fetch: async (_url, init) => {
+        const body = JSON.parse(init?.body ?? '{}');
+        const payload = JSON.parse(body.messages[1].content);
+        const keepOpt = payload.options.find((o: { key: string }) => o.key === 'true');
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({ message: { content: keepOpt.label } }),
+        };
+      },
+    });
+
+    const response = await asker.ask('test', {
+      q: { type: 'noul', instructions: 'Keep?' },
+    });
+
+    expect(response.answers.q).toEqual({ type: 'noul', noul: 1.0 });
   });
 });

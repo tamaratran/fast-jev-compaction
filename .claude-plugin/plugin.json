@@ -63,6 +63,12 @@
       "title": "Jev endpoint URL",
       "description": "Override the TypeSafe System One endpoint. Set to a local Ollama URL to avoid the TypeSafe API.",
       "default": "http://localhost:11434/v1/systemone"
+    },
+    "backend": {
+      "type": "string",
+      "title": "Model backend",
+      "description": "How to talk to the model: 'systemone' for Jev/TypeSafe API, 'chat' for Ollama chat API (distilled models), 'auto' to detect from model name.",
+      "default": "auto"
     }
   }
 }

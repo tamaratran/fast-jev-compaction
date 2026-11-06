@@ -9,6 +9,7 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
+import { ChatJevAsker } from '../src/chat-asker.js';
 import { buildJevRequest, parseJevResponse } from '../src/request.js';
 import type {
   CompactOptions,
@@ -47,6 +48,7 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  backend: 'systemone' | 'chat' | 'auto';
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -72,6 +74,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
+  const backendRaw = optionString(options, 'backend');
+  const backend = (backendRaw === 'systemone' || backendRaw === 'chat') ? backendRaw : 'auto';
   const config: HookConfig = {
     ...numbers,
     baseUrl: optionString(options, 'baseUrl') ?? HOOK_DEFAULTS.baseUrl,
@@ -82,6 +86,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    backend,
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -164,6 +169,19 @@ export type SessionCompaction = {
   messages: SessionMessage[];
 };
 
+function isChatModel(model: string): boolean {
+  return model.includes('distill');
+}
+
+function resolveBackend(config: HookConfig): 'systemone' | 'chat' {
+  if (config.backend !== 'auto') return config.backend;
+  return isChatModel(config.model) ? 'chat' : 'systemone';
+}
+
+function chatBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/v1\/systemone\/?$/, '');
+}
+
 /** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
 export async function compactSession(
   messages: readonly SessionMessage[],
@@ -171,9 +189,22 @@ export async function compactSession(
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
   const isLocal = config.baseUrl && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(config.baseUrl);
-  const apiKey = config.apiKey || (isLocal ? 'local' : '');
-  if (!apiKey) throw new Error('TYPESAFE_API_KEY is not configured (set apiKey or use a local baseUrl)');
-  const result = await compact(messages, jevAsker(fetchFn, apiKey, config.model, config.baseUrl), config);
+  const backend = resolveBackend(config);
+
+  let asker: JevAsker;
+  if (backend === 'chat') {
+    asker = new ChatJevAsker({
+      baseUrl: chatBaseUrl(config.baseUrl ?? 'http://localhost:11434'),
+      model: config.model,
+      fetch: fetchFn,
+    });
+  } else {
+    const apiKey = config.apiKey || (isLocal ? 'local' : '');
+    if (!apiKey) throw new Error('TYPESAFE_API_KEY is not configured (set apiKey or use a local baseUrl)');
+    asker = jevAsker(fetchFn, apiKey, config.model, config.baseUrl);
+  }
+
+  const result = await compact(messages, asker, config);
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
