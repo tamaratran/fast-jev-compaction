@@ -54,7 +54,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ baseUrl: 'http://localhost:11434/v1/systemone', compactAtPercent: 60, minReductionRatio: 0.25, model: 'metzger:0.8b', backend: 'auto' });
+    expect(resolveHookConfig({})).toEqual({ baseUrl: 'http://localhost:11434/v1/systemone', compactAtPercent: 60, minReductionRatio: 0.25, model: 'kaineone/metzger:0.8b', backend: 'auto' });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no', baseUrl: 'https://api.typesafe.ai/v1/systemone' }),
     ).toEqual({

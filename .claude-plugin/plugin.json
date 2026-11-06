@@ -55,8 +55,8 @@
     "model": {
       "type": "string",
       "title": "Jev model",
-      "description": "Decision model name. Use a Metzger model (e.g. metzger:0.8b, metzger) or a TypeSafe Jev model (e.g. jev-latest).",
-      "default": "metzger:0.8b"
+      "description": "Decision model name. Use a Metzger model (e.g. kaineone/metzger:0.8b, kaineone/metzger) or a TypeSafe Jev model (e.g. jev-latest).",
+      "default": "kaineone/metzger:0.8b"
     },
     "baseUrl": {
       "type": "string",

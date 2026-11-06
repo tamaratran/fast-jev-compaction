@@ -24,7 +24,7 @@ const HOOK_DEFAULTS = {
   baseUrl: 'http://localhost:11434/v1/systemone',
   compactAtPercent: 60,
   minReductionRatio: 0.25,
-  model: 'metzger:0.8b',
+  model: 'kaineone/metzger:0.8b',
 };
 
 export type HookFetchInit = {
