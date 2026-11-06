@@ -2,13 +2,13 @@
 
 Context compaction for Claude Code that doesn't lose anything important.
 
-When Claude Code runs out of context, it normally summarizes old messages — and
+When Claude Code runs out of context, it normally summarizes old messages, and
 summaries are lossy. A file path, an exact error, a constraint you mentioned
 three turns ago: gone. Metzger takes a different approach. It runs a small, fast
 model locally on your machine that reads the whole conversation and scores every
 tool call for relevance. Stale ones get cut. Everything else stays word for word.
 
-The name comes from the German word for butcher — someone who knows exactly
+The name comes from the German word for butcher: someone who knows exactly
 where to cut and what to keep.
 
 ## How it works
@@ -18,7 +18,7 @@ where to cut and what to keep.
    scores each tool call and result: is this still relevant to what we're doing?
 3. Calls that score above the threshold stay untouched. Calls below it get
    trimmed or removed entirely.
-4. User and assistant text is **never** changed — only tool calls and their
+4. User and assistant text is **never** changed. Only tool calls and their
    outputs are candidates for removal.
 
 The result: you keep your messages, code, and errors intact, without the tool
@@ -37,7 +37,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 # macOS
 brew install ollama
 
-# Windows — download from https://ollama.com/download
+# Windows: download from https://ollama.com/download
 ```
 
 Verify it's running: `ollama --version` (requires 0.35+).
@@ -48,7 +48,7 @@ Verify it's running: `ollama --version` (requires 0.35+).
 ollama pull kaineone/metzger:0.8b
 ```
 
-That's an 833 MB download. It runs comfortably on CPU — no GPU required. Takes
+That's an 833 MB download. It runs on CPU, no GPU required. Takes
 about a second to load and scores a full conversation in a few seconds.
 
 ### 3. Install the plugin
@@ -85,7 +85,7 @@ conversation messages. They speak the Jev decision protocol.
 | `kaineone/metzger` | 4.3B | 4.6 GB | Q8_0 | Higher accuracy. Needs a GPU with 6+ GB VRAM; slow on CPU-only machines. |
 | `kaineone/metzger:distill-0.8b` | 752M | 1.5 GB | F16 | Distilled variant for the chat-API backend. Full precision. |
 
-The 0.8b default is intentional — it loads in under a second and barely touches
+The 0.8b default is intentional. It loads in under a second and barely touches
 your VRAM. The 4.3B model is
 there if you want to trade speed for accuracy. To switch:
 
@@ -142,7 +142,7 @@ Set these in `~/.claude/settings.json` under `pluginConfigs.metzger`:
 | Option | Default | What it does |
 | --- | --- | --- |
 | `model` | `metzger:0.8b` | Which scoring model to use |
-| `keepThreshold` | `0.5` | Probability cutoff — lower keeps more, higher cuts more aggressively |
+| `keepThreshold` | `0.5` | Probability cutoff. Lower keeps more, higher cuts more aggressively |
 | `preserveRecentMessages` | `6` | Most recent messages that are never touched |
 | `compactAtPercent` | `60` | Context fill % that triggers automatic compaction |
 | `minReductionRatio` | `0.25` | Minimum reduction needed to use Metzger's output (otherwise falls back to built-in summary) |
@@ -194,7 +194,7 @@ can be passed in directly.
 - Only tool calls and results are candidates for removal. Text messages are
   never changed.
 - Token counts are estimated from character counts, not a tokenizer.
-- A probability score is not proof that something is safe to delete — but
+- A probability score is not proof that something is safe to delete, but
   Claude can always re-run the tool if it needs the output again.
 - The full conversation context is sent with every scoring request, so very long
   sessions near the state ceiling cost more requests.
@@ -204,7 +204,7 @@ can be passed in directly.
 ```sh
 npm install
 npm run typecheck
-npm test                  # 34 tests, all offline — no model needed
+npm test                  # 34 tests, all offline, no model needed
 npm run build
 npm run validate:plugin
 npm run demo              # live test against local Ollama
