@@ -44,7 +44,7 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
-  baseUrl?: string;
+  baseUrl: string;
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
@@ -292,23 +292,52 @@ function notify(
   $.ui.toast(text, { timeoutMs: 15_000 });
 }
 
+function parseNumCtx(showResp: HookFetchResponse): number {
+  if (!showResp.ok) return 0;
+  try {
+    const data = JSON.parse(showResp.text) as {
+      model_info?: Record<string, unknown>;
+      parameters?: string;
+    };
+    if (data.model_info) {
+      for (const [key, value] of Object.entries(data.model_info)) {
+        if (key.endsWith('.context_length') && typeof value === 'number') return value;
+      }
+    }
+    if (typeof data.parameters === 'string') {
+      const match = data.parameters.match(/^num_ctx\s+(\d+)/m);
+      if (match) return parseInt(match[1]!, 10);
+    }
+  } catch {}
+  return 0;
+}
+
 async function checkOllamaModel(
   fetchFn: HookFetch,
   baseUrl: string,
   model: string,
-): Promise<{ ollamaUp: boolean; modelPulled: boolean }> {
+): Promise<{ ollamaUp: boolean; modelPulled: boolean; numCtx: number }> {
   const ollamaBase = baseUrl.replace(/\/v1\/systemone\/?$/, '');
   try {
     const resp = await fetchFn(`${ollamaBase}/api/tags`);
-    if (!resp.ok) return { ollamaUp: false, modelPulled: false };
+    if (!resp.ok) return { ollamaUp: false, modelPulled: false, numCtx: 0 };
     const data = JSON.parse(resp.text) as { models?: { name?: string }[] };
     const names = (data.models ?? []).map((m) => m.name ?? '');
     const pulled = names.some(
       (n) => n === model || n === `${model}:latest` || n.startsWith(`${model}:`) || model.includes(':') && n === model.replace(/:/, ':'),
     );
-    return { ollamaUp: true, modelPulled: pulled };
+    let numCtx = 0;
+    if (pulled) {
+      const showResp = await fetchFn(`${ollamaBase}/api/show`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: model }),
+      });
+      numCtx = parseNumCtx(showResp);
+    }
+    return { ollamaUp: true, modelPulled: pulled, numCtx };
   } catch {
-    return { ollamaUp: false, modelPulled: false };
+    return { ollamaUp: false, modelPulled: false, numCtx: 0 };
   }
 }
 
@@ -316,6 +345,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
   let setupChecked = false;
+  let modelNumCtx = 0;
 
   on('session.start', async ($, event, next) => {
     const result = await next(event);
@@ -326,7 +356,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
     const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(configured.baseUrl);
     if (!isLocal) return result;
 
-    const { ollamaUp, modelPulled } = await checkOllamaModel(
+    const { ollamaUp, modelPulled, numCtx } = await checkOllamaModel(
       async (url, init) => {
         const r = await $.http.fetch(url, init);
         return { status: r.status, ok: r.ok, text: r.text };
@@ -334,6 +364,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       configured.baseUrl,
       configured.model,
     );
+    modelNumCtx = numCtx;
 
     if (!ollamaUp) {
       $.ui.toast(
@@ -357,6 +388,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
+      if (modelNumCtx > 0) {
+        const maxReq = Math.floor(modelNumCtx * 0.9);
+        config.maxRequestTokens = Math.min(config.maxRequestTokens ?? 30_000, maxReq);
+        config.maxStateTokens = Math.min(config.maxStateTokens ?? 25_000, maxReq - 500);
+      }
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };

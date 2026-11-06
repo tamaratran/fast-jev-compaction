@@ -5,7 +5,7 @@ and replaces the default summarization with verbatim message retention, minus
 the tool calls and results that Metzger's scoring model says are no longer
 relevant.
 
-`hooks/fast-jev.ts` is the adapter: it reads plugin options, checks that Ollama
+`hooks/metzger.ts` is the adapter: it reads plugin options, checks that Ollama
 and the model are available on session start, hands compaction transcripts to
 the library in `src/`, and maps the results back onto session messages.
 

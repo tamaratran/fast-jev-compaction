@@ -6,7 +6,7 @@ import {
   resolveHookConfig,
   summarize,
   toSessionMessages,
-} from '../hooks/fast-jev.ts';
+} from '../hooks/metzger.ts';
 import { ChatJevAsker } from '../src/chat-asker.js';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
 
