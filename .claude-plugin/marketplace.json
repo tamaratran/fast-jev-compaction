@@ -9,7 +9,6 @@
       "name": "metzger",
       "source": "./",
       "description": "Context compaction for Claude Code — a small local model scores each message and cuts what's dead.",
-      "version": "0.4.0",
       "license": "MIT"
     }
   ]
