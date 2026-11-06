@@ -341,6 +341,35 @@ async function checkOllamaModel(
   }
 }
 
+export async function listMetzgerModels(
+  fetchFn: HookFetch,
+  baseUrl: string,
+): Promise<{ models: string[]; ollamaUp: boolean }> {
+  const ollamaBase = baseUrl.replace(/\/v1\/systemone\/?$/, '');
+  try {
+    const resp = await fetchFn(`${ollamaBase}/api/tags`);
+    if (!resp.ok) return { models: [], ollamaUp: false };
+    const data = JSON.parse(resp.text) as { models?: { name?: string }[] };
+    const models = (data.models ?? [])
+      .map((m) => m.name ?? '')
+      .filter((n) => n.startsWith('kaineone/metzger:'));
+    return { models, ollamaUp: true };
+  } catch {
+    return { models: [], ollamaUp: false };
+  }
+}
+
+export function formatModelList(models: string[], active: string): string {
+  if (models.length === 0) return 'No Metzger models installed. Run: ollama pull kaineone/metzger:0.8b';
+  const lines = models.map((m) => `  ${m}${m === active ? ' (active)' : ''}`);
+  return `Installed Metzger models:\n${lines.join('\n')}\n\nUsage: /metzger-model <tag>  (e.g. /metzger-model latest)`;
+}
+
+export function resolveModelTag(arg: string): string {
+  if (arg.includes('/')) return arg;
+  return `kaineone/metzger:${arg}`;
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
@@ -355,6 +384,12 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
     const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(configured.baseUrl);
     if (!isLocal) return result;
+
+    await $.command.register({
+      name: 'metzger-model',
+      description: 'Switch the Metzger scoring model',
+      argumentHint: '[tag]',
+    });
 
     const { ollamaUp, modelPulled, numCtx } = await checkOllamaModel(
       async (url, init) => {
@@ -383,6 +418,44 @@ export const register: Register = (on: On, options: PluginOptions) => {
     }
 
     return result;
+  });
+
+  on('command.run', { command: 'metzger-model' }, async ($, event, next) => {
+    const ollamaBase = configured.baseUrl.replace(/\/v1\/systemone\/?$/, '');
+    const fetchFn: HookFetch = async (url, init) => {
+      const r = await $.http.fetch(url, init);
+      return { status: r.status, ok: r.ok, text: r.text };
+    };
+
+    const { models, ollamaUp } = await listMetzgerModels(fetchFn, configured.baseUrl);
+    if (!ollamaUp) return { text: 'Ollama is not running.' };
+
+    const args = (event as { args?: string }).args?.trim();
+    if (!args) return { text: formatModelList(models, configured.model) };
+
+    const fullName = resolveModelTag(args);
+    if (fullName === configured.model) return { text: `Already using ${fullName}.` };
+
+    if (!models.includes(fullName)) {
+      return { text: `${fullName} is not installed. Run: ollama pull ${fullName}` };
+    }
+
+    const showResp = await fetchFn(`${ollamaBase}/api/show`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: fullName }),
+    });
+    const numCtx = parseNumCtx(showResp);
+
+    configured.model = fullName;
+    modelNumCtx = numCtx;
+
+    const setResult = await $.config.set({ key: 'metzger.model', value: fullName });
+    if (setResult && typeof setResult === 'object' && 'deny' in setResult) {
+      return { text: `Switched to ${fullName} for this session (num_ctx: ${numCtx}), but could not persist the setting.` };
+    }
+
+    return { text: `Switched to ${fullName} (num_ctx: ${numCtx}).` };
   });
 
   on('session.compact', async ($, event, next) => {

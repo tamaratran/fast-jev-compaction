@@ -3,7 +3,10 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  formatModelList,
+  listMetzgerModels,
   resolveHookConfig,
+  resolveModelTag,
   summarize,
   toSessionMessages,
 } from '../hooks/metzger.ts';
@@ -239,5 +242,52 @@ describe('ChatJevAsker', () => {
     });
 
     expect(response.answers.q).toEqual({ type: 'noul', noul: 1.0 });
+  });
+});
+
+describe('model switch command helpers', () => {
+  it('listMetzgerModels filters for kaineone/metzger: models', async () => {
+    const fetch = async () => ({
+      status: 200,
+      ok: true,
+      text: JSON.stringify({
+        models: [
+          { name: 'kaineone/metzger:0.8b' },
+          { name: 'kaineone/metzger:latest' },
+          { name: 'qwen3.5:9b' },
+          { name: 'other:model' },
+        ],
+      }),
+    });
+    const result = await listMetzgerModels(fetch, 'http://localhost:11434/v1/systemone');
+    expect(result.ollamaUp).toBe(true);
+    expect(result.models).toEqual(['kaineone/metzger:0.8b', 'kaineone/metzger:latest']);
+  });
+
+  it('listMetzgerModels returns ollamaUp false on fetch error', async () => {
+    const fetch = async () => { throw new Error('connection refused'); };
+    const result = await listMetzgerModels(fetch, 'http://localhost:11434/v1/systemone');
+    expect(result.ollamaUp).toBe(false);
+    expect(result.models).toEqual([]);
+  });
+
+  it('formatModelList marks the active model', () => {
+    const text = formatModelList(
+      ['kaineone/metzger:0.8b', 'kaineone/metzger:latest'],
+      'kaineone/metzger:0.8b',
+    );
+    expect(text).toContain('kaineone/metzger:0.8b (active)');
+    expect(text).toContain('kaineone/metzger:latest');
+    expect(text).not.toContain('kaineone/metzger:latest (active)');
+  });
+
+  it('formatModelList shows install hint when empty', () => {
+    expect(formatModelList([], 'x')).toContain('ollama pull');
+  });
+
+  it('resolveModelTag expands bare tags', () => {
+    expect(resolveModelTag('latest')).toBe('kaineone/metzger:latest');
+    expect(resolveModelTag('0.8b')).toBe('kaineone/metzger:0.8b');
+    expect(resolveModelTag('kaineone/metzger:latest')).toBe('kaineone/metzger:latest');
   });
 });
