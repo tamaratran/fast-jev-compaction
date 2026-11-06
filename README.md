@@ -84,8 +84,8 @@ conversation messages. They speak the Jev decision protocol.
 | --- | --- | --- | --- | --- |
 | `kaineone/metzger:0.8b` | 773M | 833 MB | Q8_0 | **Default.** Fast on CPU or GPU. Good accuracy for most sessions. |
 | `kaineone/metzger` | 4.3B | 4.6 GB | Q8_0 | Higher accuracy. Needs a GPU with 6+ GB VRAM; slow on CPU-only machines. |
-| `kaineone/metzger-distill:0.8b` | 752M | 1.5 GB | F16 | Distilled variant for the chat-API backend. Full precision. |
-| `kaineone/metzger-distill:0.8b-v2` | 752M | 1.5 GB | F16 | V2 of the distillation. Chat-API backend. |
+| `kaineone/metzger:distill-0.8b` | 752M | 1.5 GB | F16 | Distilled variant for the chat-API backend. Full precision. |
+| `kaineone/metzger:distill-0.8b-v2` | 752M | 1.5 GB | F16 | V2 of the distillation. Chat-API backend. |
 
 The 0.8b default is intentional — it loads in under a second, barely touches
 your VRAM, and won't freeze your machine during compaction. The 4.3B model is
