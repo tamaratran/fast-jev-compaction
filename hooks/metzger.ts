@@ -299,14 +299,14 @@ function parseNumCtx(showResp: HookFetchResponse): number {
       model_info?: Record<string, unknown>;
       parameters?: string;
     };
+    if (typeof data.parameters === 'string') {
+      const match = data.parameters.match(/^num_ctx\s+(\d+)/m);
+      if (match) return parseInt(match[1]!, 10);
+    }
     if (data.model_info) {
       for (const [key, value] of Object.entries(data.model_info)) {
         if (key.endsWith('.context_length') && typeof value === 'number') return value;
       }
-    }
-    if (typeof data.parameters === 'string') {
-      const match = data.parameters.match(/^num_ctx\s+(\d+)/m);
-      if (match) return parseInt(match[1]!, 10);
     }
   } catch {}
   return 0;
