@@ -21,9 +21,8 @@ where to cut and what to keep.
 4. User and assistant text is **never** changed — only tool calls and their
    outputs are candidates for removal.
 
-The result: you keep the real messages, the actual code, the exact errors —
-just without the tool output you'll never look at again. No summaries, no
-rewrites, no paraphrasing.
+The result: you keep your messages, code, and errors intact, without the tool
+output you'll never look at again.
 
 ## Quick start
 
@@ -85,10 +84,9 @@ conversation messages. They speak the Jev decision protocol.
 | `kaineone/metzger:0.8b` | 773M | 833 MB | Q8_0 | **Default.** Fast on CPU or GPU. Good accuracy for most sessions. |
 | `kaineone/metzger` | 4.3B | 4.6 GB | Q8_0 | Higher accuracy. Needs a GPU with 6+ GB VRAM; slow on CPU-only machines. |
 | `kaineone/metzger:distill-0.8b` | 752M | 1.5 GB | F16 | Distilled variant for the chat-API backend. Full precision. |
-| `kaineone/metzger:distill-0.8b-v2` | 752M | 1.5 GB | F16 | V2 of the distillation. Chat-API backend. |
 
-The 0.8b default is intentional — it loads in under a second, barely touches
-your VRAM, and won't freeze your machine during compaction. The 4.3B model is
+The 0.8b default is intentional — it loads in under a second and barely touches
+your VRAM. The 4.3B model is
 there if you want to trade speed for accuracy. To switch:
 
 ```json
@@ -116,8 +114,7 @@ Metzger looks at the whole thing and might decide:
   not a tool call. **Always kept.**
 
 After Metzger runs, the conversation is shorter but nothing important is gone.
-Claude still has every instruction, every decision, every piece of code it's
-actively working with. It just doesn't have the `cat` output of a file you
+Claude still has your instructions and the code it's actively working with. It just doesn't have the `cat` output of a file you
 looked at once and never touched again.
 
 ## Under the hood
