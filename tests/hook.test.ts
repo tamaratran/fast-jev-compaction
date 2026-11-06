@@ -56,13 +56,12 @@ describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({ baseUrl: 'http://localhost:11434/v1/systemone', compactAtPercent: 60, minReductionRatio: 0.25, model: 'kaineone/metzger:0.8b', backend: 'auto' });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no', baseUrl: 'https://api.typesafe.ai/v1/systemone' }),
+      resolveHookConfig({ keepThreshold: 0.3, maxStateTokens: 1000, model: 'custom-model', goal: 'g', compactAtPercent: 'no', baseUrl: 'http://localhost:11434/v1/systemone' }),
     ).toEqual({
-      apiKey: 'k',
-      baseUrl: 'https://api.typesafe.ai/v1/systemone',
+      baseUrl: 'http://localhost:11434/v1/systemone',
       keepThreshold: 0.3,
       maxStateTokens: 1000,
-      model: 'jev-x',
+      model: 'custom-model',
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
@@ -115,14 +114,14 @@ describe('session message mapping', () => {
 describe('compactSession', () => {
   it('runs the library over the engine fetch and reports the outcome', async () => {
     const bodies: string[] = [];
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k', model: 'jev-x' };
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), model: 'kaineone/metzger:0.8b' };
     const { result: output, messages } = await compactSession(
       transcript(),
       config,
       jevFetch((name) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1), bodies),
     );
     expect(bodies).toHaveLength(1);
-    expect(JSON.parse(bodies[0]!).model).toBe('jev-x');
+    expect(JSON.parse(bodies[0]!).model).toBe('kaineone/metzger:0.8b');
     expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
     expect(messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
     expect(summarize(output)).toMatch(/^\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens \(full\) in 1 request\(s\)$/);
@@ -131,7 +130,7 @@ describe('compactSession', () => {
   });
 
   it('splits a long decision log into ui.log lines under the host limit', async () => {
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    const config = resolveHookConfig({ preserveRecentMessages: 1 });
     const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1));
     const lines = decisionLogLines(output, 60);
     expect(lines).toEqual([
@@ -142,23 +141,15 @@ describe('compactSession', () => {
     expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);
   });
 
-  it('throws on a missing key and on failed requests so the hook falls back', async () => {
+  it('throws on failed requests so the hook falls back', async () => {
     const config = resolveHookConfig({ preserveRecentMessages: 1 });
-    const remoteConfig = { ...config, baseUrl: 'https://api.typesafe.ai/v1/systemone' };
-    await expect(compactSession(transcript(), remoteConfig, jevFetch(() => 0))).rejects.toThrow(/TYPESAFE_API_KEY/);
     await expect(
-      compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
+      compactSession(transcript(), config, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
   });
 
-  it('uses a placeholder apiKey for localhost baseUrl without TYPESAFE_API_KEY', async () => {
-    const config = resolveHookConfig({ preserveRecentMessages: 1 });
-    const { result } = await compactSession(transcript(), config, jevFetch(() => 0.1));
-    expect(result.stats.calls).toBeGreaterThan(0);
-  });
-
-  it('treats 127.0.0.1 and [::1] as local endpoints that skip the apiKey requirement', async () => {
-    for (const host of ['http://127.0.0.1:11434/v1/systemone', 'http://[::1]:11434/v1/systemone']) {
+  it('works with localhost, 127.0.0.1 and [::1] endpoints', async () => {
+    for (const host of ['http://localhost:11434/v1/systemone', 'http://127.0.0.1:11434/v1/systemone', 'http://[::1]:11434/v1/systemone']) {
       const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), baseUrl: host };
       const { result } = await compactSession(transcript(), config, jevFetch(() => 0.1));
       expect(result.stats.calls).toBeGreaterThan(0);

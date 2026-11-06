@@ -43,11 +43,9 @@ See the root README for the full list.
 | `baseUrl` | `http://localhost:11434/v1/systemone` |
 | `backend` | `auto` |
 
-When `baseUrl` points to localhost, no API key is needed.
-
 ## Fallback
 
-If the scoring model fails, the response is malformed, the key is unavailable,
+If the scoring model fails, the response is malformed,
 or the estimated reduction is below `minReductionRatio`, the plugin logs a
 message and falls back to Claude Code's built-in compaction. You'll see a toast
 explaining why.

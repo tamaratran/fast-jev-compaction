@@ -5,11 +5,9 @@ import {
   buildJevRequest,
   collectToolCalls,
   compact,
-  compactMessages,
   decideCall,
   estimateTokens,
   fitState,
-  JevClient,
   parseJevResponse,
   reductionRatio,
   resolveOptions,
@@ -389,15 +387,15 @@ describe('compact', () => {
   });
 });
 
-describe('HTTP client', () => {
-  it('builds a System One request', () => {
-    const request = buildJevRequest({ apiKey: 'k' }, { a: 1 }, {
+describe('HTTP request building', () => {
+  it('builds a System One request with local defaults', () => {
+    const request = buildJevRequest({ apiKey: 'local' }, { a: 1 }, {
       q: { type: 'noul', instructions: 'x' },
     });
-    expect(request.url).toBe('https://api.typesafe.ai/v1/systemone');
-    expect(request.headers.authorization).toBe('Bearer k');
+    expect(request.url).toBe('http://localhost:11434/v1/systemone');
+    expect(request.headers.authorization).toBe('Bearer local');
     expect(JSON.parse(request.body)).toEqual({
-      model: 'jev-latest',
+      model: 'kaineone/metzger:0.8b',
       state: { a: 1 },
       questions: { q: { type: 'noul', instructions: 'x' } },
     });
@@ -408,26 +406,5 @@ describe('HTTP client', () => {
     expect(() => parseJevResponse(200, true, 'not json')).toThrow(/malformed/);
     expect(() => parseJevResponse(200, true, '{}')).toThrow(/missing answers/);
     expect(parseJevResponse(200, true, '{"answers":{}}')).toEqual({ answers: {} });
-  });
-
-  it('asks over fetch and refuses to run without a key', async () => {
-    const bodies: string[] = [];
-    const client = new JevClient({
-      apiKey: 'k',
-      model: 'jev-test',
-      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
-        bodies.push(String(init?.body));
-        return new Response(JSON.stringify({ answers: { q: { noul: 0.4 } } }), { status: 200 });
-      }) as typeof fetch,
-    });
-    const response = await client.ask('state', { q: { type: 'noul', instructions: 'x' } });
-    expect(response.answers.q).toEqual({ noul: 0.4 });
-    expect(JSON.parse(bodies[0]!).model).toBe('jev-test');
-
-    const keyless = new JevClient({ apiKey: '' });
-    await expect(keyless.ask('s', {})).rejects.toThrow(/TYPESAFE_API_KEY/);
-    await expect(
-      compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
-    ).rejects.toThrow(/TYPESAFE_API_KEY/);
   });
 });

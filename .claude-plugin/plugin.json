@@ -5,12 +5,6 @@
   "description": "Context compaction for Claude Code — a small local model scores each message and cuts what's dead.",
   "license": "MIT",
   "userConfig": {
-    "apiKey": {
-      "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
-      "sensitive": true
-    },
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
@@ -56,19 +50,19 @@
     "model": {
       "type": "string",
       "title": "Jev model",
-      "description": "Decision model name. Use a Metzger model (e.g. kaineone/metzger:0.8b, kaineone/metzger) or a TypeSafe Jev model (e.g. jev-latest).",
+      "description": "Decision model name (e.g. kaineone/metzger:0.8b, kaineone/metzger).",
       "default": "kaineone/metzger:0.8b"
     },
     "baseUrl": {
       "type": "string",
       "title": "Jev endpoint URL",
-      "description": "Override the TypeSafe System One endpoint. Set to a local Ollama URL to avoid the TypeSafe API.",
+      "description": "Ollama System One endpoint URL.",
       "default": "http://localhost:11434/v1/systemone"
     },
     "backend": {
       "type": "string",
       "title": "Model backend",
-      "description": "How to talk to the model: 'systemone' for Jev/TypeSafe API, 'chat' for Ollama chat API (distilled models), 'auto' to detect from model name.",
+      "description": "How to talk to the model: 'systemone' for the System One protocol, 'chat' for the Ollama chat API (distilled models), 'auto' to detect from model name.",
       "default": "auto"
     }
   }

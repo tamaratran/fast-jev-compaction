@@ -43,7 +43,6 @@ export type HookFetchResponse = {
 export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetchResponse>;
 
 export type HookConfig = CompactOptions & {
-  apiKey?: string;
   baseUrl: string;
   compactAtPercent: number;
   minReductionRatio: number;
@@ -88,8 +87,6 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
     backend,
   };
-  const apiKey = optionString(options, 'apiKey');
-  if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
   return config;
@@ -188,7 +185,6 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  const isLocal = config.baseUrl && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(config.baseUrl);
   const backend = resolveBackend(config);
 
   let asker: JevAsker;
@@ -199,9 +195,7 @@ export async function compactSession(
       fetch: fetchFn,
     });
   } else {
-    const apiKey = config.apiKey || (isLocal ? 'local' : '');
-    if (!apiKey) throw new Error('TYPESAFE_API_KEY is not configured (set apiKey or use a local baseUrl)');
-    asker = jevAsker(fetchFn, apiKey, config.model, config.baseUrl);
+    asker = jevAsker(fetchFn, 'local', config.model, config.baseUrl);
   }
 
   const result = await compact(messages, asker, config);
@@ -258,25 +252,6 @@ export function decisionLogLines(
       ? `decisions: ${chunk}`
       : `decisions (${index + 1}/${chunks.length}): ${chunk}`,
   );
-}
-
-async function getApiKey(
-  $: {
-    env: { get: (name: string) => Promise<string | undefined> };
-    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
-  },
-  config: HookConfig,
-): Promise<string | undefined> {
-  if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
-  if (fromEnv) return fromEnv;
-  const settings = await $.settings.read();
-  const env = settings['env'];
-  if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
-    if (typeof value === 'string' && value) return value;
-  }
-  return undefined;
 }
 
 function notify(
@@ -387,7 +362,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const config = { ...configured };
       if (modelNumCtx > 0) {
         const maxReq = Math.floor(modelNumCtx * 0.9);
         config.maxRequestTokens = Math.min(config.maxRequestTokens ?? 30_000, maxReq);

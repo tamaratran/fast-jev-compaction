@@ -149,26 +149,8 @@ Set these in `~/.claude/settings.json` under `pluginConfigs.metzger`:
 | `maxStateTokens` | `25000` | Token budget for the conversation context sent to the scorer |
 | `maxRequestTokens` | `30000` | Token budget per scoring request (context + questions) |
 | `truncateHeadChars` | `300` | Characters kept from a truncated tool result |
-| `baseUrl` | `http://localhost:11434/v1/systemone` | Scoring endpoint (change for TypeSafe cloud) |
-| `backend` | `auto` | `systemone` for Jev API, `chat` for Ollama chat API (distilled models), `auto` to detect |
-
-## TypeSafe cloud API (alternative)
-
-If you don't want to run a local model, you can use TypeSafe's hosted Jev API:
-
-```json
-{
-  "pluginConfigs": {
-    "metzger": {
-      "model": "jev-latest",
-      "baseUrl": "https://api.typesafe.ai/v1/systemone"
-    }
-  }
-}
-```
-
-Set your API key as `TYPESAFE_API_KEY` in your environment or as the `apiKey`
-plugin option.
+| `baseUrl` | `http://localhost:11434/v1/systemone` | Ollama System One endpoint |
+| `backend` | `auto` | `systemone` for the System One protocol, `chat` for the Ollama chat API (distilled models), `auto` to detect |
 
 ## npm library
 
@@ -219,7 +201,7 @@ If you use [MemoryGraph](https://github.com/modelcontextprotocol/servers), the [
 This started as a fork of [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)
 by [Tamara Tran](https://github.com/tamaratran), who built the original plugin
 using Jev decisions for verbatim compaction. Our
-fork switched the default from the TypeSafe cloud API to locally-served models,
+fork replaced the cloud API with locally-served models,
 trained purpose-built scoring models (the Metzger family), added a chat-API
 backend for distilled models, added automatic Ollama health checks, and
 optimized for low-resource machines. It's now maintained by
