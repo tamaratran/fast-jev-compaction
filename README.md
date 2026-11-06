@@ -210,10 +210,15 @@ npm run validate:plugin
 npm run demo              # live test against local Ollama
 ```
 
+## Companion plugins
+
+If you use [MemoryGraph](https://github.com/modelcontextprotocol/servers), the [memorygraph-bridge](https://github.com/FlintWave/memorygraph-bridge) plugin saves key context to MemoryGraph before compaction so agents can recall it afterward.
+
 ## Origin
 
-This started as a fork of [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction),
-which pioneered the idea of using Jev decisions for verbatim compaction. Our
+This started as a fork of [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)
+by [Tamara Tran](https://github.com/tamaratran), who built the original plugin
+using Jev decisions for verbatim compaction. Our
 fork switched the default from the TypeSafe cloud API to locally-served models,
 trained purpose-built scoring models (the Metzger family), added a chat-API
 backend for distilled models, added automatic Ollama health checks, and
