@@ -21,6 +21,15 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  pinnedTools: [
+    'Agent',
+    'Task',
+    'SendMessage',
+    'TaskStop',
+    'mcp__t3-code__delegate_task',
+    'mcp__t3-code__task_cancel',
+    'mcp__t3-code__task_status',
+  ],
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,6 +58,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    pinnedTools: options.pinnedTools ?? DEFAULT_OPTIONS.pinnedTools,
   };
 }
 
@@ -249,7 +259,7 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
 
 /**
  * Compacts a transcript by asking Jev, for every tool call outside the pinned
- * first and newest messages, whether the call and whether its result must
+ * first and newest messages and not to a pinned tool, whether the call and whether its result must
  * stay. The whole history (results omitted, fitted into `maxStateTokens`) is
  * sent as state with every batch of questions. Throws when Jev fails or the
  * history cannot be fitted; the caller decides whether to fall back.
@@ -261,7 +271,11 @@ export async function compact(
 ): Promise<CompactResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
+  const calls = collectToolCalls(
+    messages,
+    resolved.preserveRecentMessages,
+    resolved.pinnedTools,
+  );
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 

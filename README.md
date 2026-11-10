@@ -21,8 +21,8 @@ built-in compaction summary with the original messages.
 ## How it works
 
 1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in
-   the first message or in the newest `preserveRecentMessages` messages are
-   pinned and never touched.
+   the first message or in the newest `preserveRecentMessages` messages, and
+   calls to a tool named in `pinnedTools`, are pinned and never touched.
 2. The **state** sent to Jev is the whole conversation so far, oldest first,
    with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
    Tool inputs are included, texts are included, nothing is summarized.
@@ -110,6 +110,15 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `pinnedTools` | helper tools (below) | Tool names (exact match) whose calls and results are never compacted; `[]` pins none |
+
+`pinnedTools` defaults to the tools that start, message or stop helper agents:
+`Agent`, `Task`, `SendMessage`, `TaskStop`, `mcp__t3-code__delegate_task`,
+`mcp__t3-code__task_cancel` and `mcp__t3-code__task_status`. The result of a
+call that starts a helper carries the helper's id (`agentId: …`), and the
+session needs that id later to message or stop the helper; dropping the call,
+or truncating its result, would lose it. Pinned calls count toward the
+`pinned` stat.
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting

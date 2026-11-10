@@ -57,6 +57,16 @@ function optionString(options: PluginOptions, key: string): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+/** A comma-separated list of names; empty entries are ignored, so `''` is none. */
+function optionList(options: PluginOptions, key: string): string[] | undefined {
+  const value = options[key];
+  if (typeof value !== 'string') return undefined;
+  return value
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
+
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
 export function resolveHookConfig(options: PluginOptions): HookConfig {
   const numbers: Partial<Omit<CompactOptions, 'goal'>> = {};
@@ -84,6 +94,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
+  const pinnedTools = optionList(options, 'pinnedTools');
+  if (pinnedTools) config.pinnedTools = pinnedTools;
   return config;
 }
 

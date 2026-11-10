@@ -79,7 +79,17 @@ describe('options', () => {
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
       truncateHeadChars: 300,
+      pinnedTools: [
+        'Agent',
+        'Task',
+        'SendMessage',
+        'TaskStop',
+        'mcp__t3-code__delegate_task',
+        'mcp__t3-code__task_cancel',
+        'mcp__t3-code__task_status',
+      ],
     });
+    expect(resolveOptions({ pinnedTools: [] }).pinnedTools).toEqual([]);
     expect(resolveOptions({
       keepThreshold: Number.NaN,
       preserveRecentMessages: 2.7,
@@ -113,6 +123,31 @@ describe('tool call collection', () => {
     ]);
     expect(calls[2]?.isError).toBe(true);
     expect(calls[0]?.resultChars).toBe(fileA.length);
+  });
+
+  it('pins calls to the given tools wherever they are', () => {
+    const messages = [
+      message('user', 'start a helper'),
+      call('h1', 'Agent', { prompt: 'review' }, 'agentId: abc123'),
+      result('h1', 'agentId: abc123'),
+      ...transcript().slice(1),
+    ];
+    const pinned = (tools?: string[]) =>
+      collectToolCalls(messages, 1, tools).map((c) => [c.tool, c.pinned]);
+    expect(pinned(['Agent'])).toEqual([
+      ['Agent', true],
+      ['Read', false],
+      ['Read', false],
+      ['Bash', false],
+    ]);
+    expect(pinned(['Bash'])).toEqual([
+      ['Agent', false],
+      ['Read', false],
+      ['Read', false],
+      ['Bash', true],
+    ]);
+    expect(pinned([])).toEqual(pinned());
+    expect(pinned()[0]).toEqual(['Agent', false]);
   });
 
   it('ignores calls without a result', () => {
@@ -377,6 +412,55 @@ describe('compact', () => {
     const output = await compact(transcript(), fakeJev(() => 0.95), { preserveRecentMessages: 1 });
     expect(output.decisions.every((d) => d.action === 'keep')).toBe(true);
     expect(reductionRatio(output)).toBe(0);
+  });
+
+  it('keeps helper calls verbatim by default even when Jev would drop them', async () => {
+    const seen: Seen[] = [];
+    const helperResult = `agentId: abc123\n${'report line\n'.repeat(100)}`;
+    const messages = [
+      message('user', 'start a helper'),
+      call('h1', 'Agent', { prompt: 'review' }, helperResult),
+      result('h1', helperResult),
+      call('h2', 'SendMessage', { to: 'abc123', message: 'continue' }, 'sent'),
+      result('h2', 'sent'),
+      ...transcript().slice(1),
+    ];
+    const output = await compact(messages, fakeJev(() => 0, seen), { preserveRecentMessages: 1 });
+
+    expect(seen.flatMap((r) => r.questions).sort()).toEqual([
+      'call_t3',
+      'call_t4',
+      'call_t5',
+      'result_t3',
+      'result_t4',
+      'result_t5',
+    ]);
+    expect(output.decisions.map((d) => [d.tool, d.reason])).toEqual([
+      ['Agent', 'pinned'],
+      ['SendMessage', 'pinned'],
+      ['Read', 'call_dropped'],
+      ['Read', 'call_dropped'],
+      ['Bash', 'call_dropped'],
+    ]);
+    expect(output.messages.slice(0, 5)).toEqual(messages.slice(0, 5));
+    expect(output.messages[1]).toBe(messages[1]);
+    expect(output.messages[2]).toBe(messages[2]);
+    expect(output.stats).toMatchObject({ pinned: 2, callsDropped: 3 });
+  });
+
+  it('pins no tool when pinnedTools is empty', async () => {
+    const messages = [
+      message('user', 'start a helper'),
+      call('h1', 'Agent', { prompt: 'review' }, 'agentId: abc123'),
+      result('h1', 'agentId: abc123'),
+      ...transcript().slice(1),
+    ];
+    const output = await compact(messages, fakeJev(() => 0), {
+      preserveRecentMessages: 1,
+      pinnedTools: [],
+    });
+    expect(output.decisions[0]).toMatchObject({ tool: 'Agent', reason: 'call_dropped' });
+    expect(output.stats.pinned).toBe(0);
   });
 
   it('rejects malformed answers', async () => {
