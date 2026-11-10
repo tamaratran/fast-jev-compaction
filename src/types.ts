@@ -43,7 +43,7 @@ export interface ToolCall {
   resultIndex: number;
   resultChars: number;
   isError: boolean;
-  /** In the first or the newest preserved messages; never a candidate. */
+  /** In the first or the newest preserved messages, or a pinned tool; never a candidate. */
   pinned: boolean;
 }
 
@@ -105,6 +105,12 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Tool names (exact match) whose calls and results are never compacted.
+   * Defaults to the tools that start, message or stop helper agents, whose
+   * results carry the ids needed to reach them later. `[]` pins none.
+   */
+  pinnedTools?: readonly string[];
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +120,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  pinnedTools: readonly string[];
 }
 
 export interface CompactResult {

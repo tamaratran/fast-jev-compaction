@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -51,6 +51,12 @@
       "title": "Truncated tool result head",
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
+    },
+    "pinnedTools": {
+      "type": "string",
+      "title": "Tools always kept",
+      "description": "Comma-separated tool names whose calls and results are never compacted. Defaults to the tools that start, message or stop helper agents, whose results carry the ids needed to reach them later. Leave empty to pin none.",
+      "default": "Agent,Task,SendMessage,TaskStop,mcp__t3-code__delegate_task,mcp__t3-code__task_cancel,mcp__t3-code__task_status"
     },
     "model": {
       "type": "string",

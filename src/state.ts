@@ -57,12 +57,16 @@ export function isPinned(
 
 /**
  * Pairs every tool_use with its tool_result by `tool_use_id`. Calls without a
- * result are not candidates (there is nothing to drop yet).
+ * result are not candidates (there is nothing to drop yet). A call is pinned
+ * when it or its result sits in a pinned message, or its tool is one of
+ * `pinnedTools` (exact name match).
  */
 export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
+  pinnedTools: readonly string[] = [],
 ): ToolCall[] {
+  const pinnedNames = new Set(pinnedTools);
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
     for (const result of message.toolResults ?? []) {
@@ -84,6 +88,7 @@ export function collectToolCalls(
         resultChars: found.result.text.length,
         isError: found.result.isError ?? false,
         pinned:
+          pinnedNames.has(tool.tool) ||
           isPinned(callIndex, messages.length, preserveRecentMessages) ||
           isPinned(found.index, messages.length, preserveRecentMessages),
       });

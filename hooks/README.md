@@ -55,6 +55,7 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
+| `pinnedTools` | `Agent,Task,SendMessage,TaskStop,mcp__t3-code__delegate_task,mcp__t3-code__task_cancel,mcp__t3-code__task_status` |
 | `model` | `jev-latest` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
@@ -63,7 +64,10 @@ development setup.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
+do. `pinnedTools` is a comma-separated list of tool names whose calls and
+results are always kept verbatim (by default the helper-agent tools, so the
+helper ids in their results survive compaction); an empty value pins none.
+The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
 fitted into the state budget, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's

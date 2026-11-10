@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import {
   compactSession,
@@ -7,7 +8,13 @@ import {
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
-import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
+import {
+  applyDecisions,
+  collectToolCalls,
+  decideCall,
+  resolveOptions,
+  type Message,
+} from '../src/index.js';
 
 type SessionMessage = Message & { handle?: string };
 
@@ -65,6 +72,27 @@ describe('hook config', () => {
       compactAtPercent: 60,
       minReductionRatio: 0.25,
     });
+  });
+
+  it('reads pinnedTools as a comma-separated list, empty meaning none', () => {
+    expect(resolveHookConfig({ pinnedTools: ' Agent, mcp__x__y ,,Task ' }).pinnedTools).toEqual([
+      'Agent',
+      'mcp__x__y',
+      'Task',
+    ]);
+    expect(resolveHookConfig({ pinnedTools: '' }).pinnedTools).toEqual([]);
+    expect(resolveHookConfig({ pinnedTools: 3 }).pinnedTools).toBeUndefined();
+  });
+
+  it('declares the pinnedTools default the library uses', async () => {
+    const manifest = JSON.parse(
+      await readFile(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8'),
+    );
+    const declared = manifest.userConfig.pinnedTools;
+    expect(declared.type).toBe('string');
+    expect(resolveHookConfig({ pinnedTools: declared.default }).pinnedTools).toEqual(
+      resolveOptions().pinnedTools,
+    );
   });
 });
 
