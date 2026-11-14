@@ -20,6 +20,52 @@ even when it matters later. This plugin never rewrites anything. It only
 deletes tool calls and tool results that Laya says are no longer needed. User
 and assistant text stays verbatim and in order.
 
+## Install
+
+You need [Claude Code](https://claude.com/claude-code) 2.1.274 or newer and
+[uv](https://docs.astral.sh/uv/) (for `laya-serve`, Python 3.10 or newer).
+From a checkout of this repository, run the script for your shell:
+
+```sh
+./scripts/install          # bash, zsh, sh (macOS, Linux, Git Bash)
+```
+
+```powershell
+./scripts/install          # PowerShell
+```
+
+```bat
+scripts\install           :: cmd
+```
+
+The script:
+
+1. Installs `laya-serve` with `uv tool install "laya[serve]"` if it is not
+   on the `PATH` yet.
+2. Adds this repository as a plugin marketplace
+   (`claude plugin marketplace add Chamoouske/fast-laya-plugin`), or refreshes
+   it if it is already there (`claude plugin marketplace update`).
+3. Installs the plugin in user scope
+   (`claude plugin install fast-laya-plugin@fast-laya-plugin`).
+4. Warns if `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` is not set to `1`, and prints
+   the command that sets it.
+
+It is safe to run again. Pass another marketplace source as the first argument
+to install from somewhere else, for example the checkout itself:
+`./scripts/install "$PWD"`. In PowerShell, use `./scripts/install $PWD`. A
+local source loads in place, so edits take effect at the next session start
+or `/reload-plugins`.
+
+Then turn on function hooks (see [Manual install](#manual-install)) and
+restart Claude Code or run `/reload-plugins`. `laya-serve` starts by itself
+with each session (see [Automatic start](#automatic-start)). The first start
+downloads the English checkpoint (about 850 MB).
+
+`scripts/install` and `scripts/install.bat` are thin wrappers around
+`scripts/install.sh` and `scripts/install.ps1`. The `.bat` wrapper runs the
+`.ps1` script with `-ExecutionPolicy Bypass`, so it works under any execution
+policy.
+
 ## How it works
 
 1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in
@@ -122,7 +168,7 @@ Set `autoStart` to `false` to manage the server yourself, and
 `layaServeCommand` to an absolute path when `laya-serve` is not on the `PATH`
 Claude Code sees. A remote `baseUrl` is never started.
 
-## Install in Claude Code
+## Manual install
 
 Function hooks are an early-access Claude Code feature (2.1.274 or newer).
 Set the opt-in flag wherever Claude Code runs.
