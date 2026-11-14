@@ -1,19 +1,13 @@
 {
-  "name": "fast-jev-compaction",
-  "version": "0.3.0",
-  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "name": "fast-laya-plugin",
+  "version": "0.4.0",
+  "description": "Verbatim compaction for Claude Code sessions, guided by a local Laya model.",
   "license": "MIT",
   "userConfig": {
-    "apiKey": {
-      "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
-      "sensitive": true
-    },
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
-      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.",
+      "description": "Minimum Laya probability that a tool call or tool result is still needed; below it the item is removed.",
       "default": 0.5
     },
     "preserveRecentMessages": {
@@ -36,27 +30,33 @@
     },
     "maxStateTokens": {
       "type": "number",
-      "title": "Maximum Jev state tokens",
-      "description": "Estimated token budget for the conversation state sent with every Jev request.",
-      "default": 25000
-    },
-    "maxRequestTokens": {
-      "type": "number",
-      "title": "Maximum Jev request tokens",
-      "description": "Estimated token budget for state plus questions in one Jev request.",
-      "default": 30000
+      "title": "Maximum state tokens per call",
+      "description": "Estimated Laya token budget for the state sent with each tool call. Keep it about 100 below the checkpoint max_len (512 for laya, 1024 for laya-multilingual).",
+      "default": 400
     },
     "truncateHeadChars": {
       "type": "number",
       "title": "Truncated tool result head",
-      "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
+      "description": "Characters of a tool result kept when Laya decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
     "model": {
       "type": "string",
-      "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
-      "default": "jev-latest"
+      "title": "Laya checkpoint",
+      "description": "Checkpoint laya-serve should use: laya (English, 512 tokens), laya-multilingual (1024 tokens), or any name laya-serve accepts; unknown names auto-route.",
+      "default": "laya"
+    },
+    "concurrency": {
+      "type": "number",
+      "title": "Parallel requests",
+      "description": "Laya requests in flight at once (laya-serve answers 503 above LAYA_MAX_CONCURRENT, 16 by default).",
+      "default": 4
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "laya-serve endpoint",
+      "description": "URL of the laya-serve /v1/systemone endpoint.",
+      "default": "http://127.0.0.1:8000/v1/systemone"
     }
   }
 }
