@@ -9,11 +9,16 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
-import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import {
+  buildLayaRequest,
+  DEFAULT_BASE_URL,
+  DEFAULT_MODEL,
+  parseLayaResponse,
+} from '../src/request.js';
 import type {
   CompactOptions,
   CompactResult,
-  JevAsker,
+  LayaAsker,
   Message,
   ToolResult,
   ToolUse,
@@ -23,6 +28,7 @@ const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  baseUrl: DEFAULT_BASE_URL,
 };
 
 export type HookFetchInit = {
@@ -41,10 +47,10 @@ export type HookFetchResponse = {
 export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetchResponse>;
 
 export type HookConfig = CompactOptions & {
-  apiKey?: string;
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  baseUrl: string;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -64,8 +70,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'keepThreshold',
     'preserveRecentMessages',
     'maxStateTokens',
-    'maxRequestTokens',
     'truncateHeadChars',
+    'concurrency',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
@@ -79,25 +85,24 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    baseUrl: optionString(options, 'baseUrl') ?? HOOK_DEFAULTS.baseUrl,
   };
-  const apiKey = optionString(options, 'apiKey');
-  if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
   return config;
 }
 
-/** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+/** A `LayaAsker` over the engine's `$.http.fetch`. */
+export function layaAsker(fetchFn: HookFetch, model: string, baseUrl: string): LayaAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildLayaRequest({ model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
         body: request.body,
       });
-      return parseJevResponse(response.status, response.ok, response.text);
+      return parseLayaResponse(response.status, response.ok, response.text);
     },
   };
 }
@@ -161,14 +166,13 @@ export type SessionCompaction = {
   messages: SessionMessage[];
 };
 
-/** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
+/** Runs the library over a session transcript; throws when Laya is unreachable or fails. */
 export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const result = await compact(messages, layaAsker(fetchFn, config.model, config.baseUrl), config);
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -186,7 +190,9 @@ export function summarize(result: CompactResult): string {
   ].filter(Boolean);
   return `${percent(reductionRatio(result))} reduction; ${
     parts.join(', ') || 'no tool calls'
-  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)`;
+  }; ${stats.requests} request(s), largest state ~${stats.maxStateTokens} tokens${
+    stats.truncatedRequests > 0 ? `, ${stats.truncatedRequests} cut by Laya` : ''
+  }`;
 }
 
 const UI_LOG_MAX_CHARS = 4096;
@@ -224,25 +230,6 @@ export function decisionLogLines(
   );
 }
 
-async function getApiKey(
-  $: {
-    env: { get: (name: string) => Promise<string | undefined> };
-    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
-  },
-  config: HookConfig,
-): Promise<string | undefined> {
-  if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
-  if (fromEnv) return fromEnv;
-  const settings = await $.settings.read();
-  const env = settings['env'];
-  if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
-    if (typeof value === 'string' && value) return value;
-  }
-  return undefined;
-}
-
 function notify(
   $: {
     ui: {
@@ -262,16 +249,15 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
+      const { result, messages } = await compactSession(event.messages, configured, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
-      if (reductionRatio(result) < config.minReductionRatio) {
+      if (reductionRatio(result) < configured.minReductionRatio) {
         notify(
           $,
-          `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
+          `fallback to built-in summary (below ${percent(configured.minReductionRatio)} minimum: ${summarize(result)})`,
         );
         return next(event);
       }

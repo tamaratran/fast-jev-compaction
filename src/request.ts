@@ -1,54 +1,50 @@
-import type { JevAnswer, JevQuestions, JevResponse, JevState } from './types.js';
+import type { LayaAnswer, LayaQuestions, LayaResponse, LayaState } from './types.js';
 
-export const SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';
-export const DEFAULT_MODEL = 'jev-latest';
+export const DEFAULT_BASE_URL = 'http://127.0.0.1:8000/v1/systemone';
+export const DEFAULT_MODEL = 'laya';
 
-export interface JevRequest {
+export interface LayaRequest {
   url: string;
   method: 'POST';
   headers: Record<string, string>;
   body: string;
 }
 
-/** The HTTP request for one Jev call, for any fetch-like transport. */
-export function buildJevRequest(
+/** The HTTP request for one `laya-serve` call, for any fetch-like transport. */
+export function buildLayaRequest(
   params: {
-    apiKey: string;
     model?: string;
     baseUrl?: string;
   },
-  state: JevState,
-  questions: JevQuestions,
-): JevRequest {
+  state: LayaState,
+  questions: LayaQuestions,
+): LayaRequest {
   return {
-    url: params.baseUrl ?? SYSTEM_ONE_URL,
+    url: params.baseUrl || DEFAULT_BASE_URL,
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${params.apiKey}`,
-      'content-type': 'application/json',
-    },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: params.model ?? DEFAULT_MODEL,
+      model: params.model || DEFAULT_MODEL,
       state,
       questions,
     }),
   };
 }
 
-/** Validates a Jev response body; throws on anything but an `answers` object. */
-export function parseJevResponse(
+/** Validates a response body; throws on anything but an `answers` object. */
+export function parseLayaResponse(
   status: number,
   ok: boolean,
   text: string,
-): JevResponse {
+): LayaResponse {
   if (!ok) {
-    throw new Error(`Jev request failed (${status}): ${text.slice(0, 200)}`);
+    throw new Error(`Laya request failed (${status}): ${text.slice(0, 200)}`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error('Jev returned malformed JSON');
+    throw new Error('Laya returned malformed JSON');
   }
   if (
     parsed === null ||
@@ -57,24 +53,35 @@ export function parseJevResponse(
     parsed.answers === null ||
     typeof parsed.answers !== 'object'
   ) {
-    throw new Error('Jev response is missing answers');
+    throw new Error('Laya response is missing answers');
   }
-  return parsed as JevResponse;
+  return parsed as LayaResponse;
 }
 
-/** The `noul` probability of one answer; throws when it is not there. */
-export function noulAnswer(
-  answers: Record<string, JevAnswer>,
+/**
+ * The probability of each of `options` in one `choice` answer; throws when the
+ * answer is missing or any option has no finite probability.
+ */
+export function choiceProbabilities<K extends string>(
+  answers: Record<string, LayaAnswer>,
   name: string,
-): number {
+  options: readonly K[],
+): Record<K, number> {
   const answer = answers[name];
-  if (
-    !answer ||
-    !('noul' in answer) ||
-    typeof answer.noul !== 'number' ||
-    !Number.isFinite(answer.noul)
-  ) {
-    throw new Error(`Invalid Jev answer for ${name}`);
+  const probabilities = answer && 'probabilities' in answer ? answer.probabilities : undefined;
+  const picked = {} as Record<K, number>;
+  for (const option of options) {
+    const value = probabilities?.[option];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error(`Invalid Laya answer for ${name}`);
+    }
+    picked[option] = value;
   }
-  return answer.noul;
+  return picked;
+}
+
+/** Whether `laya-serve` reported cutting the state to fit the checkpoint window. */
+export function wasTruncated(response: LayaResponse): boolean {
+  const flag = response.usage?.truncated;
+  return flag === true || (typeof flag === 'number' && flag > 0);
 }

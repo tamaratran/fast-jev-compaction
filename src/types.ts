@@ -32,7 +32,7 @@ export interface Message {
 
 /** A tool call paired with its result by `tool_use_id`. */
 export interface ToolCall {
-  /** Short id used in the Jev state and question names (`t1`, `t2`, ...). */
+  /** Short id used in logs and decisions (`t1`, `t2`, ...). */
   id: string;
   tool_use_id: string;
   tool: string;
@@ -41,6 +41,8 @@ export interface ToolCall {
   callIndex: number;
   /** Index of the message holding the tool_result block. */
   resultIndex: number;
+  /** The full tool output, used for the short preview in the call's state. */
+  resultText: string;
   resultChars: number;
   isError: boolean;
   /** In the first or the newest preserved messages; never a candidate. */
@@ -48,9 +50,9 @@ export interface ToolCall {
 }
 
 export interface CallAnswer {
-  /** Jev's probability that the call itself still matters. */
+  /** Laya's probability that the call itself still matters (`keep` plus `truncate`). */
   keepCall: number;
-  /** Jev's probability that the full result still needs to stay verbatim. */
+  /** Laya's probability that the full result still needs to stay verbatim (`keep`). */
   keepResult: number;
 }
 
@@ -63,33 +65,29 @@ export interface CallDecision extends CallAnswer {
   reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';
 }
 
-export interface HistoryToolCall {
-  id: string;
-  tool: string;
-  input: string;
-  result: string;
-}
-
-export interface HistoryEntry {
-  i: number;
-  role: Role;
-  text: string;
-  /** Structured per call, or one compact line per call once the state has to shrink. */
-  tool_calls?: HistoryToolCall[] | string[];
-}
-
-/** The state sent with every Jev request: the whole history, results omitted. */
-export interface CompactionState {
+/** The state sent with one call's questions: that call and what surrounds it. */
+export interface CallState {
   context: string;
   goal: string;
-  history: HistoryEntry[];
+  /** Text of the nearest messages before the call, oldest first. */
+  before: string[];
+  call: {
+    tool: string;
+    input: string;
+    outcome: string;
+    output_preview: string;
+  };
+  /** Text of the nearest messages after the result, oldest first. */
+  after: string[];
+  /** One line per tool call made after this one. */
+  later_calls: string[];
 }
 
 export interface FittedState {
-  state: CompactionState;
+  state: CallState;
   tokens: number;
-  /** Which fitting stage produced the state, for diagnostics. */
-  stage: string;
+  /** Index of the size level that fitted, 0 being the roomiest. */
+  level: number;
 }
 
 export interface CompactOptions {
@@ -99,12 +97,12 @@ export interface CompactOptions {
   keepThreshold?: number;
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
-  /** Estimated token ceiling for the state. Default 25000. */
+  /** Estimated Laya token ceiling for one call's state. Default 400. */
   maxStateTokens?: number;
-  /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
-  maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /** Requests in flight at once. Default 4. */
+  concurrency?: number;
 }
 
 export interface ResolvedCompactOptions {
@@ -112,8 +110,8 @@ export interface ResolvedCompactOptions {
   keepThreshold: number;
   preserveRecentMessages: number;
   maxStateTokens: number;
-  maxRequestTokens: number;
   truncateHeadChars: number;
+  concurrency: number;
 }
 
 export interface CompactResult {
@@ -130,16 +128,17 @@ export interface CompactResult {
     resultsDropped: number;
     callsDropped: number;
     pinned: number;
-    stateTokens: number;
-    /** Which fitting stage the state needed, '' when no request was made. */
-    stateStage: string;
+    /** Largest estimated state sent, in Laya tokens. */
+    maxStateTokens: number;
     requests: number;
+    /** Requests whose state Laya reported as cut to fit its window. */
+    truncatedRequests: number;
     ms: number;
   };
 }
 
-/** The `state` of a Jev request: a string or any JSON-serialisable object. */
-export type JevState = string | object;
+/** The `state` of a request: a string or any JSON-serialisable object. */
+export type LayaState = string | object;
 
 export interface NoulQuestion {
   type: 'noul';
@@ -162,8 +161,8 @@ export interface ScoreQuestion {
   criteria: string[];
 }
 
-export type JevQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
-export type JevQuestions = Record<string, JevQuestion>;
+export type LayaQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
+export type LayaQuestions = Record<string, LayaQuestion>;
 
 export interface NoulAnswer {
   type?: 'noul';
@@ -184,19 +183,23 @@ export interface ScoreAnswer {
   probabilities: Record<string, number>;
 }
 
-export type JevAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
+export type LayaAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
 
-export interface JevResponse {
+/** A `/v1/systemone` response; `laya-serve` adds truncation facts to `usage`. */
+export interface LayaResponse {
   model?: string;
-  answers: Record<string, JevAnswer>;
+  answers: Record<string, LayaAnswer>;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    truncated?: boolean | number;
+    state_tokens?: number;
+    state_tokens_dropped?: number;
   };
   [key: string]: unknown;
 }
 
-/** Anything that can answer Jev questions: `JevClient`, or a host-provided adapter. */
-export interface JevAsker {
-  ask(state: JevState, questions: JevQuestions): Promise<JevResponse>;
+/** Anything that can answer questions about a state: `LayaClient`, or a host-provided adapter. */
+export interface LayaAsker {
+  ask(state: LayaState, questions: LayaQuestions): Promise<LayaResponse>;
 }

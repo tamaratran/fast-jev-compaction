@@ -3,10 +3,12 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
-} from '../hooks/fast-jev.ts';
+  type HookFetch,
+} from '../hooks/fast-laya.ts';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
 
 type SessionMessage = Message & { handle?: string };
@@ -40,27 +42,47 @@ function transcript(): SessionMessage[] {
   ];
 }
 
-function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
-  return async (_url: string, init?: { body?: string }) => {
-    bodies.push(init?.body ?? '');
-    const { questions } = JSON.parse(init?.body ?? '{}') as { questions: Record<string, unknown> };
-    const answers = Object.fromEntries(
-      Object.keys(questions).map((key) => [key, { type: 'noul', noul: answer(key) }]),
-    );
+type Sent = {
+  url: string;
+  body: { model: string; state: { call: { tool: string } }; questions: Record<string, unknown> };
+};
+
+function layaFetch(keep: (tool: string) => number, sent: Sent[] = []): HookFetch {
+  return async (url, init) => {
+    const body = JSON.parse(init?.body ?? '{}') as Sent['body'];
+    sent.push({ url, body });
+    const p = keep(body.state.call.tool);
+    const probabilities = { keep: p, truncate: 0, drop: 1 - p };
+    const answers = { fate: { type: 'choice', choice: p >= 0.5 ? 'keep' : 'drop', confidence: 1, probabilities } };
     return { status: 200, ok: true, text: JSON.stringify({ answers }) };
   };
 }
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      model: 'laya',
+      baseUrl: 'http://127.0.0.1:8000/v1/systemone',
+    });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({
+        keepThreshold: 0.3,
+        maxStateTokens: 900,
+        concurrency: 2,
+        model: 'laya-multilingual',
+        baseUrl: 'http://gpu-box:8000/v1/systemone',
+        goal: 'g',
+        compactAtPercent: 'no',
+        apiKey: 'ignored',
+      }),
     ).toEqual({
-      apiKey: 'k',
       keepThreshold: 0.3,
-      maxStateTokens: 1000,
-      model: 'jev-x',
+      maxStateTokens: 900,
+      concurrency: 2,
+      model: 'laya-multilingual',
+      baseUrl: 'http://gpu-box:8000/v1/systemone',
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
@@ -83,11 +105,11 @@ describe('session message mapping', () => {
     expect(out[0]).toBe(messages[0]);
     expect(out[1]?.handle).toBeUndefined();
     expect(out[1]?.toolUses[0]?.text).toMatch(
-      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
+      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-laya-plugin truncated 1700 chars`),
     );
     expect(out[2]?.handle).toBeUndefined();
     expect(out[2]?.toolResults?.[0]?.text).toMatch(
-      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
+      new RegExp(`^${'x'.repeat(300)}\\n\\[fast-laya-plugin truncated 1700 chars`),
     );
     expect(out[2]?.toolResults?.[0]).toMatchObject({ tool_use_id: 'tool-1', isError: false });
     expect(out[3]).toBe(messages[3]);
@@ -110,26 +132,38 @@ describe('session message mapping', () => {
 });
 
 describe('compactSession', () => {
-  it('runs the library over the engine fetch and reports the outcome', async () => {
-    const bodies: string[] = [];
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k', model: 'jev-x' };
+  it('asks the configured laya-serve once per call and reports the outcome', async () => {
+    const sent: Sent[] = [];
+    const config = {
+      ...resolveHookConfig({ preserveRecentMessages: 1 }),
+      model: 'laya-multilingual',
+      baseUrl: 'http://gpu-box:8000/v1/systemone',
+    };
     const { result: output, messages } = await compactSession(
       transcript(),
       config,
-      jevFetch((name) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1), bodies),
+      layaFetch((tool) => (tool === 'Bash' ? 0.9 : 0.1), sent),
     );
-    expect(bodies).toHaveLength(1);
-    expect(JSON.parse(bodies[0]!).model).toBe('jev-x');
+    expect(sent).toHaveLength(2);
+    expect(sent.every((s) => s.url === 'http://gpu-box:8000/v1/systemone')).toBe(true);
+    expect(sent.every((s) => s.body.model === 'laya-multilingual')).toBe(true);
     expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
     expect(messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
-    expect(summarize(output)).toMatch(/^\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens \(full\) in 1 request\(s\)$/);
-    expect(decisionLog(output)).toBe('t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=0.90/result=0.90');
+    expect(summarize(output)).toMatch(
+      /^\d+% reduction; 1 kept, 1 call_dropped; 2 request\(s\), largest state ~\d+ tokens$/,
+    );
+    expect(summarize({ ...output, stats: { ...output.stats, truncatedRequests: 1 } })).toMatch(
+      /, 1 cut by Laya$/,
+    );
+    expect(decisionLog(output)).toBe(
+      't1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=0.90/result=0.90',
+    );
     expect(decisionLogLines(output)).toEqual([`decisions: ${decisionLog(output)}`]);
   });
 
   it('splits a long decision log into ui.log lines under the host limit', async () => {
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
-    const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1));
+    const config = resolveHookConfig({ preserveRecentMessages: 1 });
+    const { result: output } = await compactSession(transcript(), config, layaFetch(() => 0.1));
     const lines = decisionLogLines(output, 60);
     expect(lines).toEqual([
       'decisions (1/2): t1:Read:drop_call/call=0.10/result=0.10',
@@ -139,11 +173,62 @@ describe('compactSession', () => {
     expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);
   });
 
-  it('throws on a missing key and on failed requests so the hook falls back', async () => {
+  it('throws on failed or unreachable requests so the hook falls back', async () => {
     const config = resolveHookConfig({ preserveRecentMessages: 1 });
-    await expect(compactSession(transcript(), config, jevFetch(() => 0))).rejects.toThrow(/TYPESAFE_API_KEY/);
     await expect(
-      compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
-    ).rejects.toThrow(/500/);
+      compactSession(transcript(), config, async () => ({ status: 503, ok: false, text: 'busy' })),
+    ).rejects.toThrow(/503/);
+    await expect(
+      compactSession(transcript(), config, async () => {
+        throw new Error('connect ECONNREFUSED 127.0.0.1:8000');
+      }),
+    ).rejects.toThrow(/ECONNREFUSED/);
+  });
+});
+
+type Handler = (...args: unknown[]) => Promise<unknown>;
+
+function compactHook(options: Record<string, unknown>, fetchFn: HookFetch) {
+  const handlers = new Map<string, Handler>();
+  register(((name: string, handler: Handler) => handlers.set(name, handler)) as never, options as never);
+  const logs: string[] = [];
+  const $ = {
+    http: { fetch: fetchFn },
+    ui: { log: (text: string) => logs.push(text), toast: () => {} },
+  };
+  return async () => {
+    let fellBack = false;
+    const out = await handlers.get('session.compact')!($, { messages: transcript() }, async () => {
+      fellBack = true;
+      return { native: true };
+    });
+    return { out, fellBack, logs };
+  };
+}
+
+describe('session.compact hook', () => {
+  it('replaces the history when Laya trims enough', async () => {
+    const run = compactHook({ preserveRecentMessages: 1 }, layaFetch(() => 0.1));
+    const { out, fellBack, logs } = await run();
+    expect(fellBack).toBe(false);
+    expect((out as { messages: unknown[] }).messages).toHaveLength(3);
+    expect(logs.at(-1)).toMatch(/^kept 3\/7 messages, no summary/);
+  });
+
+  it('falls back to the native summary when Laya is down', async () => {
+    const run = compactHook({ preserveRecentMessages: 1 }, async () => {
+      throw new Error('connect ECONNREFUSED 127.0.0.1:8000');
+    });
+    const { out, fellBack, logs } = await run();
+    expect(fellBack).toBe(true);
+    expect(out).toEqual({ native: true });
+    expect(logs.at(-1)).toBe('fallback to built-in summary (connect ECONNREFUSED 127.0.0.1:8000)');
+  });
+
+  it('falls back when the reduction is below minReductionRatio', async () => {
+    const run = compactHook({ preserveRecentMessages: 1 }, layaFetch(() => 0.9));
+    const { fellBack, logs } = await run();
+    expect(fellBack).toBe(true);
+    expect(logs.at(-1)).toMatch(/^fallback to built-in summary \(below 25% minimum/);
   });
 });
