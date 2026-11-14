@@ -1,15 +1,16 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "fast-laya-plugin",
+  "description": "Verbatim Claude Code compaction guided by a local Laya model (laya-serve).",
   "owner": {
-    "name": "tamaratran",
-    "url": "https://github.com/tamaratran"
+    "name": "Chamoouske",
+    "url": "https://github.com/Chamoouske"
   },
   "plugins": [
     {
-      "name": "fast-jev-compaction",
+      "name": "fast-laya-plugin",
       "source": "./",
-      "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
-      "version": "0.3.0",
+      "description": "Verbatim compaction for Claude Code sessions, guided by a local Laya model.",
+      "version": "0.4.0",
       "license": "MIT"
     }
   ]

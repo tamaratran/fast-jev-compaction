@@ -1,7 +1,7 @@
 {
-  "name": "fast-jev-compaction",
-  "version": "0.2.0",
-  "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model.",
+  "name": "fast-laya-plugin",
+  "version": "0.4.0",
+  "description": "Continuous, verbatim context compaction for Claude Code using a local Laya model (laya-serve).",
   "type": "module",
   "license": "MIT",
   "engines": {
