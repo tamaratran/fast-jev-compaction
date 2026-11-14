@@ -60,9 +60,18 @@ const ERROR_RE = /^\s*(FAIL|FAILED|ERROR|Error:|Traceback|Exception|panic:)|\b(F
 const TODO_RE = /\b(TODO|FIXME|XXX)\b/;
 const DECISION_RE = /\bDECISION:|\b(decided to|we decided|chosen approach)\b/i;
 
-/** True when the text carries an error, an unresolved TODO/FIXME or a recorded decision. */
+/**
+ * TODO/FIXME and decision markers only protect results this short: in a long
+ * file read or grep dump they are incidental, and locking the whole result
+ * would defeat compaction. Errors (isError or error-looking text) protect at
+ * any length, since the full failure output is what the assistant needs.
+ */
+const MARKER_MAX_CHARS = 2000;
+
+/** True when the text carries an error, or (if short) an unresolved TODO/FIXME or a recorded decision. */
 export function isCriticalText(text: string, isError = false): boolean {
-  return isError || ERROR_RE.test(text) || TODO_RE.test(text) || DECISION_RE.test(text);
+  if (isError || ERROR_RE.test(text)) return true;
+  return text.length <= MARKER_MAX_CHARS && (TODO_RE.test(text) || DECISION_RE.test(text));
 }
 
 /**
@@ -207,7 +216,8 @@ export function goalFromMessages(messages: readonly Message[]): string {
 export function fitState(
   messages: readonly Message[],
   calls: readonly ToolCall[],
-  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'>,
+  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'> &
+    Partial<Pick<ResolvedCompactOptions, 'pinFirstMessages'>>,
 ): FittedState {
   const goal = options.goal || goalFromMessages(messages);
   const stateOf = (history: HistoryEntry[]): CompactionState => ({
@@ -250,7 +260,7 @@ export function fitState(
   }
 
   const pinned = (entry: HistoryEntry): boolean =>
-    isPinned(entry.i, messages.length, options.preserveRecentMessages);
+    isPinned(entry.i, messages.length, options.preserveRecentMessages, options.pinFirstMessages ?? 1);
   const indices = history.map((_, index) => index);
   const order = [
     ...indices.filter((index) => !pinned(history[index]!)),

@@ -280,7 +280,10 @@ export async function compact(
   const started = Date.now();
   const resolved = resolveOptions(options);
   const calls = collectToolCalls(messages, resolved.preserveRecentMessages, resolved.pinFirstMessages);
-  const candidates = calls.filter((call) => !call.pinned);
+  // Protected calls are kept verbatim regardless of Jev's answer, so don't bill questions for them.
+  const candidates = calls.filter(
+    (call) => !call.pinned && !(resolved.protectCritical && call.protected),
+  );
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
