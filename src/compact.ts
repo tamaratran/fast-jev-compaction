@@ -21,6 +21,10 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  pinFirstMessages: 1,
+  toolThresholds: {},
+  protectCritical: true,
+  keepCallTools: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,6 +53,15 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    pinFirstMessages: Math.max(
+      0,
+      Math.floor(finite(options.pinFirstMessages, DEFAULT_OPTIONS.pinFirstMessages)),
+    ),
+    toolThresholds: Object.fromEntries(
+      Object.entries(options.toolThresholds ?? {}).filter(([, v]) => Number.isFinite(v)),
+    ),
+    protectCritical: options.protectCritical ?? DEFAULT_OPTIONS.protectCritical,
+    keepCallTools: options.keepCallTools ?? DEFAULT_OPTIONS.keepCallTools,
   };
 }
 
@@ -99,16 +112,21 @@ export function batchCalls(
 }
 
 export function decideCall(
-  call: Pick<ToolCall, 'id' | 'tool' | 'pinned'>,
+  call: Pick<ToolCall, 'id' | 'tool' | 'pinned'> & { protected?: boolean },
   answer: CallAnswer,
-  options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
+  options: Pick<ResolvedCompactOptions, 'keepThreshold'> &
+    Partial<Pick<ResolvedCompactOptions, 'toolThresholds' | 'protectCritical' | 'keepCallTools'>>,
 ): CallDecision {
   const base = { id: call.id, tool: call.tool, ...answer };
   if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
-  if (answer.keepResult >= options.keepThreshold) {
+  if (call.protected && (options.protectCritical ?? true)) {
+    return { ...base, action: 'keep', reason: 'protected' };
+  }
+  const threshold = options.toolThresholds?.[call.tool] ?? options.keepThreshold;
+  if (answer.keepResult >= threshold) {
     return { ...base, action: 'keep', reason: 'kept' };
   }
-  if (answer.keepCall >= options.keepThreshold) {
+  if (answer.keepCall >= threshold || (options.keepCallTools ?? []).includes(call.tool)) {
     return { ...base, action: 'drop_result', reason: 'result_dropped' };
   }
   return { ...base, action: 'drop_call', reason: 'call_dropped' };
@@ -261,8 +279,11 @@ export async function compact(
 ): Promise<CompactResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
-  const candidates = calls.filter((call) => !call.pinned);
+  const calls = collectToolCalls(messages, resolved.preserveRecentMessages, resolved.pinFirstMessages);
+  // Protected calls are kept verbatim regardless of Jev's answer, so don't bill questions for them.
+  const candidates = calls.filter(
+    (call) => !call.pinned && !(resolved.protectCritical && call.protected),
+  );
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
@@ -299,11 +320,48 @@ export async function compact(
       kept: count(decisions, 'kept'),
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
-      pinned: count(decisions, 'pinned'),
+      pinned: count(decisions, 'pinned') + count(decisions, 'protected'),
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
       requests: batches.length,
       ms: Date.now() - started,
     },
   };
+}
+
+/**
+ * `compact` that never throws: when Jev or the fitting fails, the original
+ * transcript comes back unchanged with `fallback.error` set.
+ */
+export async function compactSafe(
+  messages: readonly Message[],
+  asker: JevAsker,
+  options: CompactOptions = {},
+): Promise<CompactResult> {
+  const started = Date.now();
+  try {
+    return await compact(messages, asker, options);
+  } catch (error) {
+    const chars = messages.reduce((sum, message) => sum + messageChars(message), 0);
+    return {
+      messages: [...messages],
+      decisions: [],
+      fallback: { error: error instanceof Error ? error.message : String(error) },
+      stats: {
+        messagesBefore: messages.length,
+        messagesAfter: messages.length,
+        charsBefore: chars,
+        charsAfter: chars,
+        calls: 0,
+        kept: 0,
+        resultsDropped: 0,
+        callsDropped: 0,
+        pinned: 0,
+        stateTokens: 0,
+        stateStage: '',
+        requests: 0,
+        ms: Date.now() - started,
+      },
+    };
+  }
 }

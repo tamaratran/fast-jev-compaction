@@ -57,6 +57,42 @@ function optionString(options: PluginOptions, key: string): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function optionBoolean(options: PluginOptions, key: string): boolean | undefined {
+  const value = options[key];
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+}
+
+/** A string array, or a comma-separated string (userConfig/env values arrive as strings). */
+function optionList(options: PluginOptions, key: string): string[] | undefined {
+  const value = options[key];
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
+  if (typeof value === 'string') {
+    return value.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
+  }
+  return undefined;
+}
+
+/** `{ Read: 0.7 }`, or the same as a JSON string; non-finite entries are dropped. */
+function optionThresholds(options: PluginOptions, key: string): Record<string, number> | undefined {
+  let value: unknown = options[key];
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (e): e is [string, number] => typeof e[1] === 'number' && Number.isFinite(e[1]),
+    ),
+  );
+}
+
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
 export function resolveHookConfig(options: PluginOptions): HookConfig {
   const numbers: Partial<Omit<CompactOptions, 'goal'>> = {};
@@ -70,6 +106,14 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
+  const pinFirst = options['pinFirstMessages'];
+  if (typeof pinFirst === 'number' && Number.isFinite(pinFirst)) numbers.pinFirstMessages = pinFirst;
+  const protect = optionBoolean(options, 'protectCritical');
+  if (protect !== undefined) numbers.protectCritical = protect;
+  const keepCallTools = optionList(options, 'keepCallTools');
+  if (keepCallTools) numbers.keepCallTools = keepCallTools;
+  const toolThresholds = optionThresholds(options, 'toolThresholds');
+  if (toolThresholds) numbers.toolThresholds = toolThresholds;
   const config: HookConfig = {
     ...numbers,
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),

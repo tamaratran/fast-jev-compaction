@@ -112,7 +112,7 @@ describe('session message mapping', () => {
 describe('compactSession', () => {
   it('runs the library over the engine fetch and reports the outcome', async () => {
     const bodies: string[] = [];
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k', model: 'jev-x' };
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), protectCritical: false, apiKey: 'k', model: 'jev-x' };
     const { result: output, messages } = await compactSession(
       transcript(),
       config,
@@ -128,7 +128,7 @@ describe('compactSession', () => {
   });
 
   it('splits a long decision log into ui.log lines under the host limit', async () => {
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), protectCritical: false, apiKey: 'k' };
     const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1));
     const lines = decisionLogLines(output, 60);
     expect(lines).toEqual([
@@ -145,5 +145,70 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('hook option parsing', () => {
+  it('reads protectCritical, keepCallTools, toolThresholds and pinFirstMessages', () => {
+    const config = resolveHookConfig({
+      protectCritical: false,
+      keepCallTools: ['Edit', 'Bash'],
+      toolThresholds: { Read: 0.8, Bad: Number.NaN },
+      pinFirstMessages: 2,
+    });
+    expect(config).toMatchObject({
+      protectCritical: false,
+      keepCallTools: ['Edit', 'Bash'],
+      toolThresholds: { Read: 0.8 },
+      pinFirstMessages: 2,
+    });
+  });
+
+  it('accepts string forms and ignores garbage', () => {
+    expect(
+      resolveHookConfig({ protectCritical: 'false', keepCallTools: 'Edit, Write', toolThresholds: '{"Read":0.7}' }),
+    ).toMatchObject({ protectCritical: false, keepCallTools: ['Edit', 'Write'], toolThresholds: { Read: 0.7 } });
+    const bad = resolveHookConfig({ protectCritical: 'maybe', toolThresholds: '{nope', pinFirstMessages: 'x' });
+    expect(bad).not.toHaveProperty('protectCritical');
+    expect(bad).not.toHaveProperty('toolThresholds');
+    expect(bad).not.toHaveProperty('pinFirstMessages');
+  });
+});
+
+describe('critical protection through compactSession', () => {
+  const longRead = `// TODO: tidy\n${'export const a = 1;\n'.repeat(300)}`;
+  const session = (): SessionMessage[] => [
+    message('user', 'start', { handle: 'h-0' }),
+    call('tool-1', 'Read', { file_path: 'src/a.ts' }, longRead),
+    result('tool-1', longRead),
+    call('tool-2', 'Bash', { command: 'npm test' }, 'FAIL'),
+    result('tool-2', 'FAIL b.test.ts: expected 2 to be 3', true),
+    message('assistant', 'Fixing now.', { handle: 'h-5' }),
+    message('user', 'go ahead', { handle: 'h-6' }),
+  ];
+
+  it('still truncates a long Read result that merely contains a TODO', async () => {
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    const { result: output, messages } = await compactSession(session(), config, jevFetch(() => 0.1));
+    expect(output.decisions.map((d) => d.reason)).toEqual(['call_dropped', 'protected']);
+    expect(messages.some((m) => m.handle === 'h-tool-1')).toBe(false);
+    expect(messages.some((m) => m.handle === 'h-tool-2')).toBe(true);
+  });
+
+  it('does not send protected calls to Jev', async () => {
+    const bodies: string[] = [];
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    await compactSession(session(), config, jevFetch(() => 0.1, bodies));
+    const { questions } = JSON.parse(bodies[0]!) as { questions: Record<string, unknown> };
+    expect(Object.keys(questions).sort()).toEqual(['call_t1', 'result_t1']);
+  });
+
+  it('makes no request when every candidate is protected', async () => {
+    const bodies: string[] = [];
+    const messages = session().slice(0, 1).concat(session().slice(3));
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    const { result: output } = await compactSession(messages, config, jevFetch(() => 0.1, bodies));
+    expect(bodies).toHaveLength(0);
+    expect(output.decisions.map((d) => d.reason)).toEqual(['protected']);
   });
 });

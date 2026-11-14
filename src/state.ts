@@ -51,8 +51,27 @@ export function isPinned(
   index: number,
   total: number,
   preserveRecentMessages: number,
+  pinFirstMessages = 1,
 ): boolean {
-  return index === 0 || index >= total - preserveRecentMessages;
+  return index < pinFirstMessages || index >= total - preserveRecentMessages;
+}
+
+const ERROR_RE = /^\s*(FAIL|FAILED|ERROR|Error:|Traceback|Exception|panic:)|\b(FAILED|Unhandled\w*Error)\b/m;
+const TODO_RE = /\b(TODO|FIXME|XXX)\b/;
+const DECISION_RE = /\bDECISION:|\b(decided to|we decided|chosen approach)\b/i;
+
+/**
+ * TODO/FIXME and decision markers only protect results this short: in a long
+ * file read or grep dump they are incidental, and locking the whole result
+ * would defeat compaction. Errors (isError or error-looking text) protect at
+ * any length, since the full failure output is what the assistant needs.
+ */
+const MARKER_MAX_CHARS = 2000;
+
+/** True when the text carries an error, or (if short) an unresolved TODO/FIXME or a recorded decision. */
+export function isCriticalText(text: string, isError = false): boolean {
+  if (isError || ERROR_RE.test(text)) return true;
+  return text.length <= MARKER_MAX_CHARS && (TODO_RE.test(text) || DECISION_RE.test(text));
 }
 
 /**
@@ -62,6 +81,7 @@ export function isPinned(
 export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
+  pinFirstMessages = 1,
 ): ToolCall[] {
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
@@ -84,8 +104,9 @@ export function collectToolCalls(
         resultChars: found.result.text.length,
         isError: found.result.isError ?? false,
         pinned:
-          isPinned(callIndex, messages.length, preserveRecentMessages) ||
-          isPinned(found.index, messages.length, preserveRecentMessages),
+          isPinned(callIndex, messages.length, preserveRecentMessages, pinFirstMessages) ||
+          isPinned(found.index, messages.length, preserveRecentMessages, pinFirstMessages),
+        protected: isCriticalText(found.result.text, found.result.isError ?? false),
       });
     }
   });
@@ -195,7 +216,8 @@ export function goalFromMessages(messages: readonly Message[]): string {
 export function fitState(
   messages: readonly Message[],
   calls: readonly ToolCall[],
-  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'>,
+  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'> &
+    Partial<Pick<ResolvedCompactOptions, 'pinFirstMessages'>>,
 ): FittedState {
   const goal = options.goal || goalFromMessages(messages);
   const stateOf = (history: HistoryEntry[]): CompactionState => ({
@@ -238,7 +260,7 @@ export function fitState(
   }
 
   const pinned = (entry: HistoryEntry): boolean =>
-    isPinned(entry.i, messages.length, options.preserveRecentMessages);
+    isPinned(entry.i, messages.length, options.preserveRecentMessages, options.pinFirstMessages ?? 1);
   const indices = history.map((_, index) => index);
   const order = [
     ...indices.filter((index) => !pinned(history[index]!)),
