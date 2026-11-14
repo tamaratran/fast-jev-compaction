@@ -77,8 +77,10 @@ including the `serve` extra:
 uv tool install "laya[serve]"
 ```
 
-Start the server. The first start downloads the English checkpoint (about
-850 MB) from Hugging Face.
+The Claude Code plugin starts the server by itself (see
+[Automatic start](#automatic-start)), so this is all the setup it needs. To
+run it by hand, or for the library, start it yourself. The first start
+downloads the English checkpoint (about 850 MB) from Hugging Face.
 
 PowerShell:
 
@@ -98,6 +100,27 @@ Check it with `curl http://127.0.0.1:8000/health`. Useful variables:
 it the server answers 503) and `LAYA_MAX_LOADED`. Set `LAYA_MODELS` to
 `english,multilingual` if you want the 1024-token checkpoint, then set the
 plugin's `model` to `laya-multilingual` and `maxStateTokens` to about 900.
+
+### Automatic start
+
+When an agent session starts, the plugin checks `GET /health` on the
+`baseUrl` origin. If nothing answers and `baseUrl` points at this machine
+(`127.0.0.1`, `localhost` or `::1`), it starts `laya-serve` in the
+background, detached from Claude Code, with `LAYA_HOST` and `LAYA_PORT` taken
+from `baseUrl` and `LAYA_MODELS` taken from `model` (`english` for `laya`,
+`english,multilingual` for `laya-multilingual`). On Windows it uses
+`Start-Process -WindowStyle Hidden`, elsewhere `nohup … &`. A server that is
+already running, started by hand or by another session, is reused.
+
+The session does not wait for the model to load (about 60 s cold on a GTX
+1650). Compaction does: before it asks Laya, it starts the server again if it
+has died and waits up to `startupTimeoutSeconds` for `/health`, then falls
+back to the built-in summary. The server keeps running after Claude Code
+exits, so later sessions start warm.
+
+Set `autoStart` to `false` to manage the server yourself, and
+`layaServeCommand` to an absolute path when `laya-serve` is not on the `PATH`
+Claude Code sees. A remote `baseUrl` is never started.
 
 ## Install in Claude Code
 

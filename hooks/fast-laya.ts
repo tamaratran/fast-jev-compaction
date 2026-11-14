@@ -23,12 +23,16 @@ import type {
   ToolResult,
   ToolUse,
 } from '../src/types.js';
+import { layaLauncher } from './laya-launch.js';
 
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
   baseUrl: DEFAULT_BASE_URL,
+  autoStart: true,
+  layaServeCommand: 'laya-serve',
+  startupTimeoutSeconds: 90,
 };
 
 export type HookFetchInit = {
@@ -51,6 +55,9 @@ export type HookConfig = CompactOptions & {
   minReductionRatio: number;
   model: string;
   baseUrl: string;
+  autoStart: boolean;
+  layaServeCommand: string;
+  startupTimeoutSeconds: number;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -61,6 +68,11 @@ function optionNumber(options: PluginOptions, key: string, fallback: number): nu
 function optionString(options: PluginOptions, key: string): string | undefined {
   const value = options[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function optionBoolean(options: PluginOptions, key: string, fallback: boolean): boolean {
+  const value = options[key];
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
@@ -86,6 +98,14 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
     baseUrl: optionString(options, 'baseUrl') ?? HOOK_DEFAULTS.baseUrl,
+    autoStart: optionBoolean(options, 'autoStart', HOOK_DEFAULTS.autoStart),
+    layaServeCommand:
+      optionString(options, 'layaServeCommand') ?? HOOK_DEFAULTS.layaServeCommand,
+    startupTimeoutSeconds: optionNumber(
+      options,
+      'startupTimeoutSeconds',
+      HOOK_DEFAULTS.startupTimeoutSeconds,
+    ),
   };
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
@@ -245,10 +265,35 @@ function notify(
 
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
+  const laya = layaLauncher(configured);
   let compacting = false;
+
+  on('session.start', async ($, event, next) => {
+    try {
+      await laya.ensure({
+        fetch: (url) => $.http.fetch(url, { method: 'GET' }),
+        run: (argv, init) => $.process.run(argv, init),
+        isWindows: async () => (await $.env.get('OS')) === 'Windows_NT',
+        now: () => $.clock.now(),
+        sleep: (ms) => $.clock.sleep(ms),
+        log: (text) => $.ui.log(text),
+      });
+    } catch (error) {
+      $.ui.log(`laya-serve auto-start failed (${error instanceof Error ? error.message : String(error)})`);
+    }
+    return next(event);
+  });
 
   on('session.compact', async ($, event, next) => {
     try {
+      await laya.ready({
+        fetch: (url) => $.http.fetch(url, { method: 'GET' }),
+        run: (argv, init) => $.process.run(argv, init),
+        isWindows: async () => (await $.env.get('OS')) === 'Windows_NT',
+        now: () => $.clock.now(),
+        sleep: (ms) => $.clock.sleep(ms),
+        log: (text) => $.ui.log(text),
+      });
       const { result, messages } = await compactSession(event.messages, configured, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };

@@ -57,6 +57,24 @@
       "title": "laya-serve endpoint",
       "description": "URL of the laya-serve /v1/systemone endpoint.",
       "default": "http://127.0.0.1:8000/v1/systemone"
+    },
+    "autoStart": {
+      "type": "boolean",
+      "title": "Start laya-serve automatically",
+      "description": "When the endpoint is local (127.0.0.1, localhost, ::1) and not answering, start laya-serve in the background at session start and before compaction.",
+      "default": true
+    },
+    "layaServeCommand": {
+      "type": "string",
+      "title": "laya-serve command",
+      "description": "Executable started by autoStart; a name on PATH or an absolute path.",
+      "default": "laya-serve"
+    },
+    "startupTimeoutSeconds": {
+      "type": "number",
+      "title": "laya-serve startup timeout",
+      "description": "Seconds compaction waits for an auto-started laya-serve to answer /health before falling back to the built-in summary.",
+      "default": 90
     }
   }
 }

@@ -65,6 +65,9 @@ describe('hook config', () => {
       minReductionRatio: 0.25,
       model: 'laya',
       baseUrl: 'http://127.0.0.1:8000/v1/systemone',
+      autoStart: true,
+      layaServeCommand: 'laya-serve',
+      startupTimeoutSeconds: 90,
     });
     expect(
       resolveHookConfig({
@@ -76,6 +79,9 @@ describe('hook config', () => {
         goal: 'g',
         compactAtPercent: 'no',
         apiKey: 'ignored',
+        autoStart: false,
+        layaServeCommand: 'C:/tools/laya-serve.exe',
+        startupTimeoutSeconds: 'soon',
       }),
     ).toEqual({
       keepThreshold: 0.3,
@@ -86,6 +92,9 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      autoStart: false,
+      layaServeCommand: 'C:/tools/laya-serve.exe',
+      startupTimeoutSeconds: 90,
     });
   });
 });
@@ -190,7 +199,10 @@ type Handler = (...args: unknown[]) => Promise<unknown>;
 
 function compactHook(options: Record<string, unknown>, fetchFn: HookFetch) {
   const handlers = new Map<string, Handler>();
-  register(((name: string, handler: Handler) => handlers.set(name, handler)) as never, options as never);
+  register(
+    ((name: string, handler: Handler) => handlers.set(name, handler)) as never,
+    { autoStart: false, ...options } as never,
+  );
   const logs: string[] = [];
   const $ = {
     http: { fetch: fetchFn },
