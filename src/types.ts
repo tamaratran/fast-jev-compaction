@@ -45,6 +45,8 @@ export interface ToolCall {
   isError: boolean;
   /** In the first or the newest preserved messages; never a candidate. */
   pinned: boolean;
+  /** Holds an error, an unresolved TODO or a decision; never dropped entirely. */
+  protected: boolean;
 }
 
 export interface CallAnswer {
@@ -60,7 +62,7 @@ export interface CallDecision extends CallAnswer {
   id: string;
   tool: string;
   action: CallAction;
-  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';
+  reason: 'pinned' | 'protected' | 'kept' | 'result_dropped' | 'call_dropped';
 }
 
 export interface HistoryToolCall {
@@ -105,6 +107,14 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /** Leading messages never touched. Default 1. */
+  pinFirstMessages?: number;
+  /** Per-tool keep thresholds overriding `keepThreshold` (e.g. `{ Read: 0.7 }`). */
+  toolThresholds?: Record<string, number>;
+  /** Keep calls with errors, unresolved TODO/FIXME or decisions untouched. Default true. */
+  protectCritical?: boolean;
+  /** Tools whose call is never dropped (at most the result is truncated). Default Edit/Write/MultiEdit/NotebookEdit. */
+  keepCallTools?: string[];
 }
 
 export interface ResolvedCompactOptions {
@@ -114,9 +124,15 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  pinFirstMessages: number;
+  toolThresholds: Record<string, number>;
+  protectCritical: boolean;
+  keepCallTools: string[];
 }
 
 export interface CompactResult {
+  /** Set when Jev failed and the original transcript is returned unchanged. */
+  fallback?: { error: string };
   /** The compacted transcript; untouched messages are the input objects. */
   messages: Message[];
   decisions: CallDecision[];

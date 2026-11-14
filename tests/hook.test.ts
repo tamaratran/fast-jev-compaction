@@ -112,7 +112,7 @@ describe('session message mapping', () => {
 describe('compactSession', () => {
   it('runs the library over the engine fetch and reports the outcome', async () => {
     const bodies: string[] = [];
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k', model: 'jev-x' };
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), protectCritical: false, apiKey: 'k', model: 'jev-x' };
     const { result: output, messages } = await compactSession(
       transcript(),
       config,
@@ -128,7 +128,7 @@ describe('compactSession', () => {
   });
 
   it('splits a long decision log into ui.log lines under the host limit', async () => {
-    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), protectCritical: false, apiKey: 'k' };
     const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1));
     const lines = decisionLogLines(output, 60);
     expect(lines).toEqual([

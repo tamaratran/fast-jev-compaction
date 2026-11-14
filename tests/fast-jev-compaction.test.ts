@@ -5,6 +5,7 @@ import {
   buildJevRequest,
   collectToolCalls,
   compact,
+  compactSafe,
   compactMessages,
   decideCall,
   estimateTokens,
@@ -344,7 +345,7 @@ describe('compact', () => {
     const output = await compact(
       messages,
       fakeJev((name) => (name.startsWith('call_') ? 0.9 : 0.1), seen),
-      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + 150 },
+      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + 150, protectCritical: false },
     );
 
     expect(output.stats.requests).toBe(seen.length);
@@ -429,5 +430,61 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('safety and tuning', () => {
+  const dropAll = fakeJev(() => 0.1);
+
+  it('protects error results from being dropped, even when Jev says drop', async () => {
+    const output = await compact(transcript(), dropAll, { preserveRecentMessages: 1 });
+    const bash = output.decisions.find((d) => d.tool === 'Bash')!;
+    expect(bash).toMatchObject({ action: 'keep', reason: 'protected' });
+    expect(JSON.stringify(output.messages)).toContain('expected 2 to be 3');
+    expect(output.decisions.find((d) => d.tool === 'Read')!.action).toBe('drop_call');
+  });
+
+  it('protects unresolved TODOs and recorded decisions, and can be disabled', () => {
+    for (const text of ['// TODO: handle empty input', 'DECISION: use the v2 API', 'FAIL src/a.test.ts']) {
+      const msgs = [message('user', 'go'), call('a', 'Read', {}, text), result('a', text), message('user', 'x'), message('user', 'y')];
+      const [c] = collectToolCalls(msgs, 1);
+      expect(c!.protected).toBe(true);
+      expect(decideCall(c!, { keepCall: 0, keepResult: 0 }, { keepThreshold: 0.5 }).reason).toBe('protected');
+      expect(decideCall(c!, { keepCall: 0, keepResult: 0 }, { keepThreshold: 0.5, protectCritical: false }).action).toBe('drop_call');
+    }
+    const [plain] = collectToolCalls(transcript(), 1);
+    expect(plain!.protected).toBe(false);
+  });
+
+  it('applies per-tool thresholds over the global one', () => {
+    const c = { id: 't1', tool: 'Read', pinned: false };
+    const answer = { keepCall: 0.9, keepResult: 0.6 };
+    expect(decideCall(c, answer, { keepThreshold: 0.5 }).action).toBe('keep');
+    expect(decideCall(c, answer, { keepThreshold: 0.5, toolThresholds: { Read: 0.8 } }).action).toBe('drop_result');
+    expect(decideCall({ ...c, tool: 'Bash' }, answer, { keepThreshold: 0.5, toolThresholds: { Read: 0.8 } }).action).toBe('keep');
+  });
+
+  it('never drops the call of edit tools, only truncates the result', () => {
+    const c = { id: 't1', tool: 'Edit', pinned: false };
+    const d = decideCall(c, { keepCall: 0, keepResult: 0 }, { keepThreshold: 0.5, keepCallTools: ['Edit'] });
+    expect(d.action).toBe('drop_result');
+  });
+
+  it('tunes how many leading messages are pinned', () => {
+    const msgs = transcript();
+    expect(collectToolCalls(msgs, 0, 3)[0]!.pinned).toBe(true);
+    expect(collectToolCalls(msgs, 0, 1)[0]!.pinned).toBe(false);
+    expect(resolveOptions({ pinFirstMessages: 2.7 }).pinFirstMessages).toBe(2);
+    expect(resolveOptions({ pinFirstMessages: NaN }).pinFirstMessages).toBe(1);
+  });
+
+  it('compactSafe returns the original transcript when Jev fails', async () => {
+    const failing: JevAsker = { ask: async () => { throw new Error('boom'); } };
+    const msgs = transcript();
+    const output = await compactSafe(msgs, failing, { preserveRecentMessages: 1 });
+    expect(output.fallback).toEqual({ error: 'boom' });
+    expect(output.messages).toEqual(msgs);
+    expect(output.stats.messagesAfter).toBe(msgs.length);
+    expect(reductionRatio(output)).toBe(0);
   });
 });

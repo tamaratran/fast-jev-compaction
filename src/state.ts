@@ -51,8 +51,18 @@ export function isPinned(
   index: number,
   total: number,
   preserveRecentMessages: number,
+  pinFirstMessages = 1,
 ): boolean {
-  return index === 0 || index >= total - preserveRecentMessages;
+  return index < pinFirstMessages || index >= total - preserveRecentMessages;
+}
+
+const ERROR_RE = /^\s*(FAIL|FAILED|ERROR|Error:|Traceback|Exception|panic:)|\b(FAILED|Unhandled\w*Error)\b/m;
+const TODO_RE = /\b(TODO|FIXME|XXX)\b/;
+const DECISION_RE = /\bDECISION:|\b(decided to|we decided|chosen approach)\b/i;
+
+/** True when the text carries an error, an unresolved TODO/FIXME or a recorded decision. */
+export function isCriticalText(text: string, isError = false): boolean {
+  return isError || ERROR_RE.test(text) || TODO_RE.test(text) || DECISION_RE.test(text);
 }
 
 /**
@@ -62,6 +72,7 @@ export function isPinned(
 export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
+  pinFirstMessages = 1,
 ): ToolCall[] {
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
@@ -84,8 +95,9 @@ export function collectToolCalls(
         resultChars: found.result.text.length,
         isError: found.result.isError ?? false,
         pinned:
-          isPinned(callIndex, messages.length, preserveRecentMessages) ||
-          isPinned(found.index, messages.length, preserveRecentMessages),
+          isPinned(callIndex, messages.length, preserveRecentMessages, pinFirstMessages) ||
+          isPinned(found.index, messages.length, preserveRecentMessages, pinFirstMessages),
+        protected: isCriticalText(found.result.text, found.result.isError ?? false),
       });
     }
   });
