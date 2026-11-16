@@ -5,6 +5,7 @@ import {
   isLocalBaseUrl,
   layaLauncher,
   layaServeEnv,
+  serviceArgv,
   type LaunchConfig,
   type LaunchOps,
 } from '../hooks/laya-launch.ts';
@@ -15,9 +16,15 @@ const config: LaunchConfig = {
   autoStart: true,
   layaServeCommand: 'laya-serve',
   startupTimeoutSeconds: 5,
+  installService: false,
 };
 
-function fakeEngine(options: { upAfterSpawn: number; os?: string; exitCode?: number }) {
+function fakeEngine(options: {
+  upAfterSpawn: number;
+  os?: string;
+  exitCode?: number;
+  serviceExitCode?: number;
+}) {
   let now = 0;
   let spawned = false;
   let healthChecksAfterSpawn = 0;
@@ -31,8 +38,13 @@ function fakeEngine(options: { upAfterSpawn: number; os?: string; exitCode?: num
     },
     run: async (argv, init) => {
       runs.push({ argv, env: init.env });
+      if (argv.includes('install')) {
+        const exitCode = options.serviceExitCode ?? 0;
+        if (exitCode === 0) spawned = true;
+        return { exitCode, stdout: 'installed: unit\n', stderr: 'unsupported: no systemd user session\n' };
+      }
       spawned = true;
-      return { exitCode: options.exitCode ?? 0, stderr: 'not found' };
+      return { exitCode: options.exitCode ?? 0, stdout: '', stderr: 'not found' };
     },
     isWindows: async () => options.os === 'Windows_NT',
     now: async () => now,
@@ -40,6 +52,7 @@ function fakeEngine(options: { upAfterSpawn: number; os?: string; exitCode?: num
       now += ms;
     },
     log: (text) => logs.push(text),
+    pluginRoot: '/plugins/fast-laya-plugin/',
   };
   return { $, runs, logs };
 }
@@ -84,6 +97,77 @@ describe('laya-serve launch helpers', () => {
       'nohup "$0" >/dev/null 2>&1 </dev/null &',
       'laya-serve',
     ]);
+  });
+});
+
+describe('login service', () => {
+  it('runs the service script for the platform', () => {
+    expect(serviceArgv('/p/fast-laya-plugin/', 'install', false)).toEqual([
+      'sh',
+      '/p/fast-laya-plugin/scripts/service.sh',
+      'install',
+    ]);
+    expect(serviceArgv('C:\\p\\fast-laya-plugin', 'start', true)).toEqual([
+      'powershell.exe',
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      'C:\\p\\fast-laya-plugin\\scripts\\service.ps1',
+      'start',
+    ]);
+  });
+
+  it('installs the service once and lets it start laya-serve', async () => {
+    const { $, runs, logs } = fakeEngine({ upAfterSpawn: 0 });
+    const laya = layaLauncher({ ...config, installService: true });
+    await laya.installService($);
+    await laya.installService($);
+    await laya.ensure($);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.argv).toEqual(['sh', '/plugins/fast-laya-plugin/scripts/service.sh', 'install']);
+    expect(runs[0]!.env).toEqual({
+      LAYA_HOST: '127.0.0.1',
+      LAYA_PORT: '8000',
+      LAYA_MODELS: 'english',
+      LAYA_SERVE: 'laya-serve',
+    });
+    expect(logs).toEqual(['laya-serve service installed: unit']);
+  });
+
+  it('starts a dead server through the service', async () => {
+    const { $, runs } = fakeEngine({ upAfterSpawn: 0 });
+    let healthy = true;
+    $.fetch = async () => ({ ok: healthy });
+    const laya = layaLauncher({ ...config, installService: true });
+    await laya.installService($);
+    healthy = false;
+    await laya.ensure($);
+    expect(runs.map((r) => r.argv.at(-1))).toEqual(['install', 'start']);
+  });
+
+  it('falls back to a detached laya-serve where no service manager exists', async () => {
+    const { $, runs, logs } = fakeEngine({ upAfterSpawn: 0, serviceExitCode: 3 });
+    const laya = layaLauncher({ ...config, installService: true });
+    await laya.installService($);
+    await laya.ensure($);
+    expect(runs[1]!.argv).toEqual(detachedLaunchArgv('laya-serve', false));
+    expect(logs[0]).toBe(
+      'laya-serve service not available (unsupported: no systemd user session); starting laya-serve per session',
+    );
+  });
+
+  it('skips the service for remote endpoints, autoStart false and installService false', async () => {
+    for (const changed of [
+      { autoStart: false },
+      { baseUrl: 'http://gpu-box:8000/v1/systemone' },
+      { installService: false },
+    ]) {
+      const { $, runs } = fakeEngine({ upAfterSpawn: 0 });
+      await layaLauncher({ ...config, installService: true, ...changed }).installService($);
+      expect(runs).toHaveLength(0);
+    }
   });
 });
 

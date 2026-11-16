@@ -7,11 +7,13 @@ export type LaunchOps = {
   run: (
     argv: readonly string[],
     init: { env: Record<string, string>; timeoutMs: number },
-  ) => Promise<{ exitCode: number; stderr: string }>;
+  ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
   isWindows: () => Promise<boolean>;
   now: () => Promise<number>;
   sleep: (ms: number) => Promise<void>;
   log: (text: string) => void;
+  /** The plugin's directory, where `scripts/service.*` live. */
+  pluginRoot: string;
 };
 
 export type LaunchConfig = {
@@ -20,6 +22,7 @@ export type LaunchConfig = {
   autoStart: boolean;
   layaServeCommand: string;
   startupTimeoutSeconds: number;
+  installService: boolean;
 };
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
@@ -65,6 +68,37 @@ export function detachedLaunchArgv(command: string, windows: boolean): string[] 
   return ['sh', '-c', 'nohup "$0" >/dev/null 2>&1 </dev/null &', command];
 }
 
+export type ServiceAction = 'install' | 'start';
+
+/**
+ * The command that runs `scripts/service.sh` (or `service.ps1` on Windows),
+ * which keeps `laya-serve` running across logins: a systemd user service, a
+ * LaunchAgent, or a supervisor started from the Windows Run key.
+ */
+export function serviceArgv(pluginRoot: string, action: ServiceAction, windows: boolean): string[] {
+  const root = pluginRoot.replace(/[\\/]+$/, '');
+  if (windows) {
+    return [
+      'powershell.exe',
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      `${root}\\scripts\\service.ps1`,
+      action,
+    ];
+  }
+  return ['sh', `${root}/scripts/service.sh`, action];
+}
+
+/** Exit code of the service script when this machine has no service manager it supports. */
+export const SERVICE_UNSUPPORTED = 3;
+
+function lastLine(text: string): string {
+  return text.trim().split(/\r?\n/).at(-1) ?? '';
+}
+
 export function healthUrl(baseUrl: string): string {
   return `${new URL(baseUrl).origin}/health`;
 }
@@ -80,21 +114,56 @@ export async function isLayaHealthy(ops: LaunchOps, baseUrl: string): Promise<bo
 
 /**
  * Starts `laya-serve` when it is not answering, at most once per startup
- * window, and waits for it when asked. Remote endpoints and `autoStart: false`
- * are left alone.
+ * window, and waits for it when asked. With `installService`, it first
+ * installs the login service once per process and from then on starts the
+ * server through it. Remote endpoints and `autoStart: false` are left alone.
  */
 export function layaLauncher(config: LaunchConfig) {
   const enabled = config.autoStart && isLocalBaseUrl(config.baseUrl);
   const startupMs = config.startupTimeoutSeconds * 1000;
   let spawnedAt = Number.NEGATIVE_INFINITY;
+  let serviceTried = false;
+  let managed = false;
+
+  function serviceEnv(): Record<string, string> {
+    return { ...layaServeEnv(config.baseUrl, config.model), LAYA_SERVE: config.layaServeCommand };
+  }
+
+  /**
+   * Installs (or confirms) the login service, once per process. Never throws:
+   * without a service the launcher starts `laya-serve` itself, as before.
+   */
+  async function installService(ops: LaunchOps): Promise<void> {
+    if (!enabled || !config.installService || serviceTried) return;
+    serviceTried = true;
+    const windows = await ops.isWindows();
+    try {
+      const argv = serviceArgv(ops.pluginRoot, 'install', windows);
+      const { exitCode, stdout, stderr } = await ops.run(argv, { env: serviceEnv(), timeoutMs: 30_000 });
+      if (exitCode === 0) {
+        managed = true;
+        ops.log(`laya-serve service ${lastLine(stdout)}`);
+      } else if (exitCode === SERVICE_UNSUPPORTED) {
+        ops.log(`laya-serve service not available (${lastLine(stderr)}); starting laya-serve per session`);
+      } else {
+        ops.log(`laya-serve service install failed (${lastLine(stderr) || `exit ${exitCode}`}); starting laya-serve per session`);
+      }
+    } catch (error) {
+      ops.log(`laya-serve service install failed (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
 
   async function spawn(ops: LaunchOps): Promise<void> {
     const windows = await ops.isWindows();
-    const argv = detachedLaunchArgv(config.layaServeCommand, windows);
-    const env = layaServeEnv(config.baseUrl, config.model);
+    const env = managed ? serviceEnv() : layaServeEnv(config.baseUrl, config.model);
+    const argv = managed
+      ? serviceArgv(ops.pluginRoot, 'start', windows)
+      : detachedLaunchArgv(config.layaServeCommand, windows);
     const { exitCode, stderr } = await ops.run(argv, { env, timeoutMs: 15_000 });
     if (exitCode !== 0) throw new Error(`could not start ${config.layaServeCommand}: ${stderr.trim()}`);
-    ops.log(`started ${config.layaServeCommand} on ${env.LAYA_HOST}:${env.LAYA_PORT}`);
+    ops.log(
+      `started ${config.layaServeCommand} on ${env.LAYA_HOST}:${env.LAYA_PORT}${managed ? ' (service)' : ''}`,
+    );
   }
 
   async function ensure(ops: LaunchOps): Promise<void> {
@@ -119,5 +188,5 @@ export function layaLauncher(config: LaunchConfig) {
     }
   }
 
-  return { ensure, ready };
+  return { installService, ensure, ready };
 }

@@ -10,7 +10,7 @@
       "name": "fast-laya-plugin",
       "source": "./",
       "description": "Verbatim compaction for Claude Code sessions, guided by a local Laya model.",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "license": "MIT"
     }
   ]

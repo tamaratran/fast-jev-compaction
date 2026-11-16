@@ -23,7 +23,7 @@ import type {
   ToolResult,
   ToolUse,
 } from '../src/types.js';
-import { layaLauncher } from './laya-launch.js';
+import { layaLauncher, type LaunchOps } from './laya-launch.js';
 
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
@@ -33,6 +33,7 @@ const HOOK_DEFAULTS = {
   autoStart: true,
   layaServeCommand: 'laya-serve',
   startupTimeoutSeconds: 90,
+  installService: true,
 };
 
 export type HookFetchInit = {
@@ -58,6 +59,7 @@ export type HookConfig = CompactOptions & {
   autoStart: boolean;
   layaServeCommand: string;
   startupTimeoutSeconds: number;
+  installService: boolean;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -106,6 +108,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       'startupTimeoutSeconds',
       HOOK_DEFAULTS.startupTimeoutSeconds,
     ),
+    installService: optionBoolean(options, 'installService', HOOK_DEFAULTS.installService),
   };
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
@@ -270,14 +273,17 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.start', async ($, event, next) => {
     try {
-      await laya.ensure({
+      const ops: LaunchOps = {
         fetch: (url) => $.http.fetch(url, { method: 'GET' }),
         run: (argv, init) => $.process.run(argv, init),
         isWindows: async () => (await $.env.get('OS')) === 'Windows_NT',
         now: () => $.clock.now(),
         sleep: (ms) => $.clock.sleep(ms),
         log: (text) => $.ui.log(text),
-      });
+        pluginRoot: $.plugin.root,
+      };
+      await laya.installService(ops);
+      await laya.ensure(ops);
     } catch (error) {
       $.ui.log(`laya-serve auto-start failed (${error instanceof Error ? error.message : String(error)})`);
     }
@@ -293,6 +299,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
         now: () => $.clock.now(),
         sleep: (ms) => $.clock.sleep(ms),
         log: (text) => $.ui.log(text),
+        pluginRoot: $.plugin.root,
       });
       const { result, messages } = await compactSession(event.messages, configured, async (url, init) => {
         const response = await $.http.fetch(url, init);

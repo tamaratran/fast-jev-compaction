@@ -42,12 +42,16 @@ The script:
 
 1. Installs `laya-serve` with `uv tool install "laya[serve]"` if it is not
    on the `PATH` yet.
-2. Adds this repository as a plugin marketplace
+2. Installs a login service that starts `laya-serve` at every login and
+   restarts it when it dies (see [Login service](#login-service)), and starts
+   it now, so the checkpoint download begins right away. Set
+   `FAST_LAYA_NO_SERVICE=1` to skip this step.
+3. Adds this repository as a plugin marketplace
    (`claude plugin marketplace add Chamoouske/fast-laya-plugin`), or refreshes
    it if it is already there (`claude plugin marketplace update`).
-3. Installs the plugin in user scope
+4. Installs the plugin in user scope
    (`claude plugin install fast-laya-plugin@fast-laya-plugin`).
-4. Warns if `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` is not set to `1`, and prints
+5. Warns if `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` is not set to `1`, and prints
    the command that sets it.
 
 It is safe to run again. Pass another marketplace source as the first argument
@@ -57,9 +61,9 @@ local source loads in place, so edits take effect at the next session start
 or `/reload-plugins`.
 
 Then turn on function hooks (see [Manual install](#manual-install)) and
-restart Claude Code or run `/reload-plugins`. `laya-serve` starts by itself
-with each session (see [Automatic start](#automatic-start)). The first start
-downloads the English checkpoint (about 850 MB).
+restart Claude Code or run `/reload-plugins`. `laya-serve` runs as a login
+service (see [Login service](#login-service)). The first start downloads the
+English checkpoint (about 850 MB).
 
 `scripts/install` and `scripts/install.bat` are thin wrappers around
 `scripts/install.sh` and `scripts/install.ps1`. The `.bat` wrapper runs the
@@ -164,9 +168,47 @@ has died and waits up to `startupTimeoutSeconds` for `/health`, then falls
 back to the built-in summary. The server keeps running after Claude Code
 exits, so later sessions start warm.
 
-Set `autoStart` to `false` to manage the server yourself, and
+Set `autoStart` to `false` to manage the server yourself (this also turns off
+the login service), and
 `layaServeCommand` to an absolute path when `laya-serve` is not on the `PATH`
 Claude Code sees. A remote `baseUrl` is never started.
+
+### Login service
+
+So that the server is already up, and the checkpoint already downloaded, when
+a session needs it, `laya-serve` runs as a per-user service that starts at
+every login and restarts when it dies:
+
+| OS | Service | Files |
+| --- | --- | --- |
+| Linux | systemd user service `fast-laya-serve` (`Restart=always`) | `~/.config/systemd/user/fast-laya-serve.service` |
+| macOS | LaunchAgent `com.fast-laya-plugin.laya-serve` (`KeepAlive`) | `~/Library/LaunchAgents/com.fast-laya-plugin.laya-serve.plist`, log in `~/Library/Logs/fast-laya-serve.log` |
+| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry `fast-laya-serve`, which starts a supervisor script that reruns `laya-serve` 10 s after it exits | `%LOCALAPPDATA%\fast-laya-plugin\` (`laya-supervise.ps1`, `laya-serve.log`) |
+
+None of them needs administrator rights. `scripts/install` sets it up, and so
+does the plugin itself: at every session start it runs
+`scripts/service.sh install` (`service.ps1` on Windows) with the host, port
+and models taken from `baseUrl` and `model`. The script does nothing when the
+service is already installed with the same settings, and rewrites and
+restarts it when they changed. Once the service exists, the plugin starts a
+dead server through it instead of with `nohup` or `Start-Process`. Where
+there is no supported service manager (for example Linux without a systemd
+user session, such as WSL without systemd), the script exits with code 3 and
+the plugin keeps starting `laya-serve` per session, as described above.
+
+Set `installService` to `false` to stop the plugin from installing it. To
+remove it:
+
+```sh
+sh scripts/service.sh uninstall
+```
+
+```powershell
+./scripts/service.ps1 uninstall
+```
+
+`scripts/service.sh status` (or `service.ps1 status`) tells whether it is
+installed and running. `/plugin uninstall` does not remove the service.
 
 ## Manual install
 

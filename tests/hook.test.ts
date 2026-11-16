@@ -68,6 +68,7 @@ describe('hook config', () => {
       autoStart: true,
       layaServeCommand: 'laya-serve',
       startupTimeoutSeconds: 90,
+      installService: true,
     });
     expect(
       resolveHookConfig({
@@ -82,6 +83,7 @@ describe('hook config', () => {
         autoStart: false,
         layaServeCommand: 'C:/tools/laya-serve.exe',
         startupTimeoutSeconds: 'soon',
+        installService: false,
       }),
     ).toEqual({
       keepThreshold: 0.3,
@@ -95,6 +97,7 @@ describe('hook config', () => {
       autoStart: false,
       layaServeCommand: 'C:/tools/laya-serve.exe',
       startupTimeoutSeconds: 90,
+      installService: false,
     });
   });
 });
@@ -206,6 +209,7 @@ function compactHook(options: Record<string, unknown>, fetchFn: HookFetch) {
   const logs: string[] = [];
   const $ = {
     http: { fetch: fetchFn },
+    plugin: { name: 'fast-laya-plugin', root: '/plugin' },
     ui: { log: (text: string) => logs.push(text), toast: () => {} },
   };
   return async () => {

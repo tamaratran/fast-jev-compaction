@@ -1,6 +1,6 @@
 {
   "name": "fast-laya-plugin",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Continuous, verbatim context compaction for Claude Code using a local Laya model (laya-serve).",
   "type": "module",
   "license": "MIT",

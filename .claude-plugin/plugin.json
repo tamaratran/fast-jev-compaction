@@ -1,6 +1,6 @@
 {
   "name": "fast-laya-plugin",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Verbatim compaction for Claude Code sessions, guided by a local Laya model.",
   "license": "MIT",
   "userConfig": {
@@ -69,6 +69,12 @@
       "title": "laya-serve command",
       "description": "Executable started by autoStart; a name on PATH or an absolute path.",
       "default": "laya-serve"
+    },
+    "installService": {
+      "type": "boolean",
+      "title": "Keep laya-serve running across logins",
+      "description": "With autoStart and a local endpoint, install a login service at session start (systemd user service on Linux, LaunchAgent on macOS, Run-key supervisor on Windows) that starts laya-serve at every login and restarts it when it dies. Remove it with scripts/service.sh uninstall (or service.ps1 uninstall).",
+      "default": true
     },
     "startupTimeoutSeconds": {
       "type": "number",

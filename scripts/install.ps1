@@ -24,6 +24,13 @@ if ($laya) {
     throw 'laya-serve and uv not found. Install uv (https://docs.astral.sh/uv/), then run this script again.'
 }
 
+Step 'laya-serve service (start at login, restart if it dies)'
+if ($env:FAST_LAYA_NO_SERVICE -eq '1') {
+    Write-Host 'skipped (FAST_LAYA_NO_SERVICE=1)'
+} else {
+    & (Join-Path $PSScriptRoot 'service.ps1') install
+}
+
 Step "marketplace $Plugin ($Source)"
 $marketplaces = (& claude plugin marketplace list) -join "`n"
 if ($marketplaces -match [regex]::Escape($Plugin)) {
@@ -41,4 +48,4 @@ if ($env:CLAUDE_CODE_ENABLE_FUNCTION_HOOKS -ne '1' -and $userFlag -ne '1') {
     Write-Host '  [Environment]::SetEnvironmentVariable("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS", "1", "User")'
 }
 
-Write-Host "`nDone. Restart Claude Code or run /reload-plugins. laya-serve starts by itself with each session."
+Write-Host "`nDone. Restart Claude Code or run /reload-plugins. laya-serve now starts at every login and restarts if it dies."
