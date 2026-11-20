@@ -3,6 +3,8 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  outcome,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -53,7 +55,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest', verbose: false });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -64,7 +66,10 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      verbose: false,
     });
+    expect(resolveHookConfig({ verbose: true }).verbose).toBe(true);
+    expect(resolveHookConfig({ verbose: 'yes' }).verbose).toBe(false);
   });
 });
 
@@ -145,5 +150,56 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+type Logged = { logs: string[]; toasts: string[] };
+
+async function runCompactHook(options: Record<string, unknown>, answer: (name: string) => number): Promise<Logged & { answer: unknown }> {
+  const hooks = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+  const on = ((event: string, hook: (...args: unknown[]) => Promise<unknown>) => {
+    hooks.set(event, hook);
+  }) as unknown as Parameters<typeof register>[0];
+  register(on, options as Parameters<typeof register>[1]);
+  const logged: Logged = { logs: [], toasts: [] };
+  const fetchFn = jevFetch(answer);
+  const $ = {
+    ui: { log: (text: string) => logged.logs.push(text), toast: (text: string) => logged.toasts.push(text) },
+    http: { fetch: fetchFn },
+    env: { get: async () => undefined },
+    settings: { read: async () => ({}) },
+  };
+  const hook = hooks.get('session.compact')!;
+  const answerValue = await hook($, { messages: transcript() }, async () => 'built-in');
+  return { ...logged, answer: answerValue };
+}
+
+describe('transcript output', () => {
+  const keepBash = (name: string) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1);
+
+  it('logs one short outcome line by default, without the per-call decisions', async () => {
+    const { logs, toasts } = await runCompactHook({ apiKey: 'k', preserveRecentMessages: 1, minReductionRatio: 0 }, keepBash);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/^kept 5\/7 messages, \d+% smaller \(1 call dropped\)$/);
+    expect(logs.some((line) => line.startsWith('decisions'))).toBe(false);
+    expect(toasts).toEqual(logs);
+  });
+
+  it('logs the decisions and the full statistics when verbose', async () => {
+    const { logs } = await runCompactHook({ apiKey: 'k', preserveRecentMessages: 1, minReductionRatio: 0, verbose: true }, keepBash);
+    expect(logs[0]).toMatch(/^decisions: t1:Read:drop_call/);
+    expect(logs.at(-1)).toMatch(/^kept 5\/7 messages, no summary \(\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens/);
+  });
+
+  it('keeps the fallback line short by default', async () => {
+    const { logs, answer } = await runCompactHook({ apiKey: 'k', preserveRecentMessages: 1, minReductionRatio: 0.99 }, keepBash);
+    expect(answer).toBe('built-in');
+    expect(logs).toEqual([expect.stringMatching(/^fallback to built-in summary \(\d+% smaller, below the 99% minimum\)$/)]);
+  });
+
+  it('pluralizes the cut counts', () => {
+    const base = { kept: 0, resultsDropped: 2, callsDropped: 1, pinned: 0, stateTokens: 0, stateStage: 'full', requests: 1, charsBefore: 100, charsAfter: 50 };
+    const result = { messages: [], decisions: [], stats: base } as unknown as Parameters<typeof outcome>[0];
+    expect(outcome(result, 3, 9)).toMatch(/^kept 3\/9 messages, \d+% smaller \(2 results truncated, 1 call dropped\)$/);
   });
 });

@@ -57,6 +57,12 @@
       "title": "Jev model",
       "description": "TypeSafe Jev model name.",
       "default": "jev-latest"
+    },
+    "verbose": {
+      "type": "boolean",
+      "title": "Verbose log",
+      "description": "Log every per-call decision and the full statistics after a compaction. Off logs one short line.",
+      "default": false
     }
   }
 }
