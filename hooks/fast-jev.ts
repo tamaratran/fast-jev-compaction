@@ -23,6 +23,7 @@ const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  verbose: false,
 };
 
 export type HookFetchInit = {
@@ -45,11 +46,18 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  /** Log the per-call decisions and the full statistics; off keeps one short line. */
+  verbose: boolean;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
   const value = options[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function optionBoolean(options: PluginOptions, key: string, fallback: boolean): boolean {
+  const value = options[key];
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function optionString(options: PluginOptions, key: string): string | undefined {
@@ -79,6 +87,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    verbose: optionBoolean(options, 'verbose', HOOK_DEFAULTS.verbose),
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -189,6 +198,25 @@ export function summarize(result: CompactResult): string {
   }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)`;
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * The one transcript line for a compaction: how many messages stayed, how much
+ * smaller the history got, and what was cut. `summarize` keeps the full
+ * statistics for the `verbose` option.
+ */
+export function outcome(result: CompactResult, kept: number, total: number): string {
+  const { stats } = result;
+  const cuts = [
+    stats.resultsDropped > 0 ? `${plural(stats.resultsDropped, 'result')} truncated` : '',
+    stats.callsDropped > 0 ? `${plural(stats.callsDropped, 'call')} dropped` : '',
+  ].filter(Boolean);
+  const detail = cuts.length > 0 ? ` (${cuts.join(', ')})` : '';
+  return `kept ${kept}/${total} messages, ${percent(reductionRatio(result))} smaller${detail}`;
+}
+
 const UI_LOG_MAX_CHARS = 4096;
 
 export function decisionLog(result: CompactResult): string {
@@ -267,17 +295,21 @@ export const register: Register = (on: On, options: PluginOptions) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
-      for (const line of decisionLogLines(result)) $.ui.log(line);
+      if (config.verbose) for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
           $,
-          `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
+          config.verbose
+            ? `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`
+            : `fallback to built-in summary (${percent(reductionRatio(result))} smaller, below the ${percent(config.minReductionRatio)} minimum)`,
         );
         return next(event);
       }
       notify(
         $,
-        `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
+        config.verbose
+          ? `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`
+          : outcome(result, messages.length, event.messages.length),
       );
       return { messages };
     } catch (error) {
