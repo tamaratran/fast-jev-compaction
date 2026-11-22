@@ -82,6 +82,12 @@ export function resolveTransportOption(
     if (headers) transport.headers = headers;
     const contextWindow = numberOption(options, 'contextWindow');
     if (contextWindow !== undefined) transport.contextWindow = contextWindow;
+    const maxCallsPerBatch = numberOption(options, 'maxCallsPerBatch');
+    if (maxCallsPerBatch !== undefined) transport.maxCallsPerBatch = maxCallsPerBatch;
+    const maxConcurrentRequests = numberOption(options, 'maxConcurrentRequests');
+    if (maxConcurrentRequests !== undefined) {
+      transport.maxConcurrentRequests = maxConcurrentRequests;
+    }
     return transport;
   }
 
@@ -127,6 +133,10 @@ export function resolvePluginConfig(
     truncateHeadChars: numberOption(options, 'truncateHeadChars'),
     maxStateTokens: numberOption(options, 'maxStateTokens') ?? limits.maxStateTokens,
     maxRequestTokens: numberOption(options, 'maxRequestTokens') ?? limits.maxRequestTokens,
+    maxCallsPerBatch:
+      numberOption(options, 'maxCallsPerBatch') ?? limits.maxCallsPerBatch ?? 0,
+    maxConcurrentRequests:
+      numberOption(options, 'maxConcurrentRequests') ?? limits.maxConcurrentRequests ?? 0,
   };
   const apiKey = stringOption(options, 'apiKey') ?? env.FAST_JEV_API_KEY ?? env.JEV_API_KEY;
   if (apiKey) config.apiKey = apiKey;

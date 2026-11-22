@@ -5,7 +5,7 @@
  *
  *   tsx bench/run.ts --transport stub
  *   tsx bench/run.ts --transport opencode-http-free
- *   tsx bench/run.ts --transport laya --limit 5
+ *   tsx bench/run.ts --transport opencode-http-free --limit 5
  *   tsx bench/run.ts --transport typesafe --save bench/results/typesafe.json
  *
  * Three numbers matter, in this order:
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
 
   console.log(`transport   ${useStub ? 'stub (offline)' : transportLabel(http)}`);
   console.log(`cases       ${cases.length} (${cases.filter((item) => item.source === 'hand').length} hand, ${cases.filter((item) => item.source === 'session').length} session)`);
-  console.log(`limits      state ≤${resolved.maxStateTokens}, request ≤${resolved.maxRequestTokens}, threshold ${resolved.keepThreshold}, preserve ${resolved.preserveRecentMessages}`);
+  console.log(`limits      state ≤${resolved.maxStateTokens}, request ≤${resolved.maxRequestTokens}, calls/batch ${resolved.maxCallsPerBatch || 'all'}, threshold ${resolved.keepThreshold}, preserve ${resolved.preserveRecentMessages}`);
   console.log('');
   console.log('case                          calls  kept  drop  danger  probes  lost  saved   ms');
 

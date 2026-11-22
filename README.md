@@ -1,9 +1,9 @@
 # fast-jev-compaction (OpenCode fork)
 
 Fork of [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction):
-the same verbatim compaction engine, wired into OpenCode's `compaction` hook
-instead of Claude Code's, and able to ask Jev through OpenCode itself, through
-TypeSafe, or through a local Jev-compatible model.
+the same verbatim compaction engine, wired into OpenCode's `compaction` hook,
+able to ask Jev through OpenCode itself, through TypeSafe, or through a local
+Jev-compatible model.
 
 [Русская версия](README.ru.md)
 
@@ -65,34 +65,19 @@ tier is billed in dollars per call.
 | `typesafe` | HTTP, `api.typesafe.ai/v1/systemone`, `jev-latest` | `TYPESAFE_API_KEY` |
 | `opencode-http-free` | HTTP, `opencode.ai/inference/systemone`, `jev-1.13-free` | an OpenCode Console key in `auth.json` |
 | `opencode-go-free` | HTTP, `opencode.ai/inference/go/systemone` | key plus `x-opencode-session`, and the model on the Go plan |
-| `laya` | `http://127.0.0.1:8000/v1/systemone`, `laya-typed-decisions` | `pip install "laya[serve]"`, `LAYA_PRELOAD=1 laya-serve` |
 | `openjev` | `http://127.0.0.1:8009/v1/systemone`, `openjev-1.7b` | a running OpenJev server |
-| `vega` | `http://127.0.0.1:8010/v1/systemone`, `vega-0.8b` | Vega behind the systemone shim |
 
 Any other server is configured with `baseUrl` and `model`; a local address needs
-no key. Local models are asked within their real window: `laya` gets a ~320-token
-request budget, so the state is fitted much harder and compaction often falls
-back rather than sending a truncated request.
+no key. `contextWindow`, `maxCallsPerBatch` and `maxConcurrentRequests` keep a
+local model inside the window and the memory it actually has.
 
 Inside OpenCode the default goes through `ctx.experimental.generate.decisions`,
 which signs the request with the provider the user connected. Outside OpenCode
 (the bench) the same model is reached over HTTP with a key from
 `~/.local/share/opencode/auth.json`.
 
-### Region blocks
-
-Observed on a Russian network, November 2026:
-
-| Route | Answer |
-| --- | --- |
-| TypeSafe | `451 Typesafe is not available in your region` |
-| Console Jev (`opencode`) | `403 RegionError: This model is not available in your country` |
-| Go route | `400 Model jev-1.13-free isn't included in OpenCode Go` |
-
-The plugin fails closed on all three: the trial log records the error and
-OpenCode writes its summary. If Jev works for you through the `opencode`
-provider, the default preset already uses that path; the HTTP presets are for
-the bench and for other networks.
+A failed request never costs a session: the plugin leaves the result unset, the
+trial log records the error, and OpenCode writes its own summary.
 
 ## Options
 
@@ -106,6 +91,8 @@ the bench and for other networks.
 | `contextWindow` | — | total request budget of a local model |
 | `maxStateTokens` | `25000` (transport limit) | estimated ceiling for the state Jev sees |
 | `maxRequestTokens` | `30000` (transport limit) | estimated ceiling for state plus questions |
+| `maxCallsPerBatch` | `0` | tool calls per request; 0 is every call in one request |
+| `maxConcurrentRequests` | `0` | batch requests in flight; 0 is every batch at once |
 | `keepThreshold` | `0.5` | minimum keep probability for a call or result |
 | `preserveRecentMessages` | `6` | newest messages never touched (the first is always kept) |
 | `truncateHeadChars` | `300` | characters of a dropped result left before its note |
@@ -114,25 +101,9 @@ the bench and for other networks.
 | `enabled` | `true` | turn the plugin off without removing it |
 
 Environment overrides: `FAST_JEV_TRANSPORT`, `FAST_JEV_BASE_URL`,
-`FAST_JEV_MODEL`, `FAST_JEV_API_KEY`, `FAST_JEV_PROVIDER`, `FAST_JEV_MODEL_ID`,
-`FAST_JEV_LOG`, `FAST_JEV_ENABLED`, `FAST_JEV_CHAT_MODEL`.
-
-### Local model example
-
-```jsonc
-{
-  "plugins": [
-    {
-      "package": "/Users/you/.config/opencode/plugins/fast-jev-compaction",
-      "options": {
-        "baseUrl": "http://127.0.0.1:8000/v1/systemone",
-        "model": "laya-typed-decisions",
-        "contextWindow": 320
-      }
-    }
-  ]
-}
-```
+`FAST_JEV_MODEL`, `FAST_JEV_API_KEY`, `FAST_JEV_CONTEXT_WINDOW`,
+`FAST_JEV_PROVIDER`, `FAST_JEV_MODEL_ID`, `FAST_JEV_LOG`, `FAST_JEV_ENABLED`,
+`FAST_JEV_CHAT_MODEL`.
 
 ## Measuring "better or worse"
 
@@ -148,7 +119,7 @@ holds the compile error, a repeated read whose older copy is stale.
 ```sh
 tsx bench/run.ts --transport stub        # offline plumbing check
 tsx bench/run.ts --transport opencode-http-free --verbose
-tsx bench/run.ts --transport laya --limit 5
+tsx bench/run.ts --transport opencode-http-free --limit 5
 ```
 
 Metrics, in order of importance:
@@ -215,26 +186,25 @@ The engine is still usable as a library: `import { compact } from
 ## Development
 
 ```sh
-npm run typecheck     # library, plugin, bench, hooks
+npm run typecheck     # library, plugin, bench
 npm test              # unit tests, fake transport, no network
 npm run build
 npm run bench:stub    # offline bench, deterministic
 npm run bench:stub-server   # 127.0.0.1:8787/v1/systemone for a manual plugin check
 ```
 
-Two OpenCode-specific test files matter:
-
-- `tests/opencode.test.ts` — message mapping, native window rebuilding, provider
-  question translation, fail-closed answers, the hook's fallback paths;
-- the same file drives the hook with a fake event, so the compaction contract is
-  tested without OpenCode.
+`tests/fast-jev-compaction.test.ts` covers the engine: state fitting, batching,
+decisions and the rebuilt window. `tests/opencode.test.ts` covers the plugin:
+message mapping, native window rebuilding, provider question translation,
+fail-closed answers and the hook's fallback paths, driven by a fake event so the
+compaction contract is tested without OpenCode.
 
 `npm install` uses `.npmrc` with `legacy-peer-deps` because `@opencode/plugin`
 and the vitest toolchain disagree about a vite peer.
 
 ## Upstream
 
-The engine, the Claude Code hook, the SwiftUI demo and the original README come
-from [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
-This fork adds the OpenCode plugin, the transport registry, the local-model
-profiles and the bench. MIT.
+The engine and the original README come from
+[tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
+This fork replaces the host integration with an OpenCode plugin and adds the
+transport registry, local-model support and the bench. MIT.

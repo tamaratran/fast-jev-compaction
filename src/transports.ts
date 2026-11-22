@@ -18,6 +18,10 @@ export interface ProviderTransport {
   modelID: string;
   /** Total request budget the model can take, when it is smaller than Jev's ~32k. */
   contextWindow?: number;
+  /** Calls per request, when the model's attention cost per question is the binding limit. */
+  maxCallsPerBatch?: number;
+  /** Requests at once; a local engine keeps one state pass in memory per request. */
+  maxConcurrentRequests?: number;
 }
 
 /** Any server that speaks `POST /v1/systemone`: TypeSafe, OpenCode's route, a local model. */
@@ -30,6 +34,10 @@ export interface HttpTransport {
   headers?: Record<string, string>;
   /** Total request budget the model can take, when it is smaller than Jev's ~32k. */
   contextWindow?: number;
+  /** Calls per request, when the model's attention cost per question is the binding limit. */
+  maxCallsPerBatch?: number;
+  /** Requests at once; a local engine keeps one state pass in memory per request. */
+  maxConcurrentRequests?: number;
 }
 
 export type JevTransport = ProviderTransport | HttpTransport;
@@ -65,26 +73,12 @@ export const PRESETS: Record<string, JevTransport> = {
     baseUrl: SYSTEM_ONE_URL,
     model: 'jev-latest',
   },
-  /** `pip install "laya[serve]" && LAYA_PRELOAD=1 laya-serve`. */
-  laya: {
-    kind: 'http',
-    baseUrl: 'http://127.0.0.1:8000/v1/systemone',
-    model: 'laya-typed-decisions',
-    contextWindow: 320,
-  },
   /** OpenJev served by `wev serve` (or any OpenAI-compatible systemone shim). */
   openjev: {
     kind: 'http',
     baseUrl: 'http://127.0.0.1:8009/v1/systemone',
     model: 'openjev-1.7b',
     contextWindow: 32_000,
-  },
-  /** Vega through the `/v1/decide` shim in `bench/`; 73k context. */
-  vega: {
-    kind: 'http',
-    baseUrl: 'http://127.0.0.1:8010/v1/systemone',
-    model: 'vega-0.8b',
-    contextWindow: 73_000,
   },
 };
 
@@ -95,9 +89,7 @@ export const PRESET_NOTES: Record<string, string> = {
   'opencode-http-free': 'free Jev over HTTP; needs an OpenCode Console key',
   'opencode-go-free': 'Go route; needs x-opencode-session and the model on the plan',
   typesafe: 'TypeSafe System One; needs TYPESAFE_API_KEY',
-  laya: 'Laya on 127.0.0.1:8000; ~320-token state, expect fallbacks',
   openjev: 'OpenJev on 127.0.0.1:8009',
-  vega: 'Vega on 127.0.0.1:8010 through the systemone shim',
 };
 
 export type TransportEnv = Record<string, string | undefined>;
@@ -155,9 +147,11 @@ export function resolveTransport(
 
   const baseUrl = envFirst(env, ['FAST_JEV_BASE_URL', 'JEV_BASE_URL']);
   const apiKey = envFirst(env, ['FAST_JEV_API_KEY', 'JEV_API_KEY']);
+  const window = Number(envFirst(env, ['FAST_JEV_CONTEXT_WINDOW', 'JEV_CONTEXT_WINDOW']) ?? '');
   if (transport.kind === 'http') {
     if (baseUrl) transport.baseUrl = baseUrl;
     if (apiKey) transport.apiKey = apiKey;
+    if (Number.isFinite(window) && window > 0) transport.contextWindow = Math.floor(window);
     if (transport.model === 'jev-latest') {
       const model = envFirst(env, ['FAST_JEV_MODEL', 'JEV_MODEL']);
       if (model) transport.model = model;
@@ -169,6 +163,7 @@ export function resolveTransport(
   const modelID = envFirst(env, ['FAST_JEV_MODEL_ID', 'JEV_MODEL_ID']);
   if (providerID) transport.providerID = providerID;
   if (modelID) transport.modelID = modelID;
+  if (Number.isFinite(window) && window > 0) transport.contextWindow = Math.floor(window);
   return transport;
 }
 
@@ -185,9 +180,9 @@ const DEFAULT_REQUEST_TOKENS = 30_000;
 const DEFAULT_STATE_TOKENS = 25_000;
 
 /**
- * The request ceilings for a transport. A model with a small window (Laya is
- * ~320 tokens) needs the state fitted much harder; the engine's usual 25k/30k
- * would be silently truncated by the server.
+ * The request ceilings for a transport. A model with a small window needs the
+ * state fitted much harder; the engine's usual 25k/30k would be silently
+ * truncated by the server.
  */
 export function transportLimits(transport: JevTransport): {
   maxStateTokens: number;
@@ -217,5 +212,12 @@ export function withTransportLimits(
     ...options,
     maxStateTokens: options.maxStateTokens ?? limits.maxStateTokens,
     maxRequestTokens: options.maxRequestTokens ?? limits.maxRequestTokens,
+    ...(transport.maxCallsPerBatch !== undefined && options.maxCallsPerBatch === undefined
+      ? { maxCallsPerBatch: transport.maxCallsPerBatch }
+      : {}),
+    ...(transport.maxConcurrentRequests !== undefined &&
+    options.maxConcurrentRequests === undefined
+      ? { maxConcurrentRequests: transport.maxConcurrentRequests }
+      : {}),
   };
 }

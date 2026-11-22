@@ -20,6 +20,9 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   preserveRecentMessages: 6,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
+  maxCallsPerBatch: 0,
+  /** 0 = every batch at once, which is what a hosted Jev wants. */
+  maxConcurrentRequests: 0,
   truncateHeadChars: 300,
 };
 
@@ -44,6 +47,14 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     maxRequestTokens: Math.max(
       1,
       finite(options.maxRequestTokens, DEFAULT_OPTIONS.maxRequestTokens),
+    ),
+    maxCallsPerBatch: Math.max(
+      0,
+      Math.floor(finite(options.maxCallsPerBatch, DEFAULT_OPTIONS.maxCallsPerBatch)),
+    ),
+    maxConcurrentRequests: Math.max(
+      0,
+      Math.floor(finite(options.maxConcurrentRequests, DEFAULT_OPTIONS.maxConcurrentRequests)),
     ),
     truncateHeadChars: Math.max(
       0,
@@ -73,7 +84,7 @@ export function questionsFor(call: ToolCall): JevQuestions {
 export function batchCalls(
   calls: readonly ToolCall[],
   stateTokens: number,
-  options: Pick<ResolvedCompactOptions, 'maxRequestTokens'>,
+  options: Pick<ResolvedCompactOptions, 'maxRequestTokens' | 'maxCallsPerBatch'>,
 ): ToolCall[][] {
   const budget = options.maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
   const batches: ToolCall[][] = [];
@@ -81,7 +92,11 @@ export function batchCalls(
   let currentTokens = 0;
   for (const call of calls) {
     const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
-    if (current.length > 0 && currentTokens + tokens > budget) {
+    const full =
+      current.length > 0 &&
+      (currentTokens + tokens > budget ||
+        (options.maxCallsPerBatch > 0 && current.length >= options.maxCallsPerBatch));
+    if (full) {
       batches.push(current);
       current = [];
       currentTokens = 0;
@@ -252,6 +267,28 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
 }
 
 /**
+ * Runs the batch requests, at most `concurrency` at a time. A hosted Jev
+ * answers every batch well in parallel; a local engine holds one state in
+ * memory per in-flight request, so a laptop needs 1.
+ */
+async function askBatches(
+  asker: JevAsker,
+  state: CompactionState,
+  batches: readonly ToolCall[][],
+  concurrency: number,
+): Promise<Map<string, CallAnswer>[]> {
+  if (concurrency <= 0 || concurrency >= batches.length) {
+    return Promise.all(batches.map((batch) => askBatch(asker, state, batch)));
+  }
+  const answered: Map<string, CallAnswer>[] = [];
+  for (let index = 0; index < batches.length; index += concurrency) {
+    const slice = batches.slice(index, index + concurrency);
+    answered.push(...(await Promise.all(slice.map((batch) => askBatch(asker, state, batch)))));
+  }
+  return answered;
+}
+
+/**
  * Compacts a transcript by asking Jev, for every tool call outside the pinned
  * first and newest messages, whether the call and whether its result must
  * stay. The whole history (results omitted, fitted into `maxStateTokens`) is
@@ -276,8 +313,11 @@ export async function compact(
     const state = fitState(messages, calls, resolved);
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
-    const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
+    const answered = await askBatches(
+      asker,
+      state.state,
+      batches,
+      resolved.maxConcurrentRequests,
     );
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }

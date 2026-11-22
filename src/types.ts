@@ -2,7 +2,7 @@ export type Role = 'user' | 'assistant';
 
 /**
  * A tool_use block of an assistant message. `text` and `isError` mirror the
- * outcome once the transcript holds it (Claude Code attaches them).
+ * outcome once the transcript holds it.
  */
 export interface ToolUse {
   tool_use_id: string;
@@ -20,8 +20,9 @@ export interface ToolResult {
 }
 
 /**
- * One transcript message. The shape is a subset of Claude Code's
- * `SessionMessage`, so a session transcript can be passed in as is.
+ * One transcript message, in a small neutral shape: `src/opencode/messages.ts`
+ * maps OpenCode's session messages onto it, and a recorded transcript can be
+ * passed in as is.
  */
 export interface Message {
   role: Role;
@@ -103,6 +104,17 @@ export interface CompactOptions {
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
   maxRequestTokens?: number;
+  /**
+   * Tool calls per request (two questions each). Default 0, no cap. A local
+   * engine may score every question against the whole state in one pass, so
+   * its memory grows with the question count times the state length.
+   */
+  maxCallsPerBatch?: number;
+  /**
+   * Batch requests allowed at once. Default 0, no limit, which suits a hosted
+   * Jev; a local engine keeps one state pass in memory per request.
+   */
+  maxConcurrentRequests?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
 }
@@ -113,6 +125,8 @@ export interface ResolvedCompactOptions {
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;
+  maxCallsPerBatch: number;
+  maxConcurrentRequests: number;
   truncateHeadChars: number;
 }
 

@@ -1,9 +1,9 @@
 # fast-jev-compaction (форк для OpenCode)
 
 Форк [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction):
-тот же движок компакции «дословно», но подключённый к хуку `compaction` в
-OpenCode. Jev можно спросить через сам OpenCode, через TypeSafe или через
-локальную Jev-совместимую модель.
+тот же движок компакции «дословно», подключённый к хуку `compaction` в OpenCode.
+Jev можно спросить через сам OpenCode, через TypeSafe или через локальную
+Jev-совместимую модель.
 
 [English version](README.md)
 
@@ -63,34 +63,19 @@ npm install --omit=dev
 | `typesafe` | HTTP, `api.typesafe.ai/v1/systemone`, `jev-latest` | `TYPESAFE_API_KEY` |
 | `opencode-http-free` | HTTP, `opencode.ai/inference/systemone` | ключ Console в `auth.json` |
 | `opencode-go-free` | HTTP, `opencode.ai/inference/go/systemone` | ключ, `x-opencode-session` и модель в тарифе Go |
-| `laya` | `http://127.0.0.1:8000/v1/systemone` | `pip install "laya[serve]"`, `LAYA_PRELOAD=1 laya-serve` |
 | `openjev` | `http://127.0.0.1:8009/v1/systemone` | запущенный OpenJev |
-| `vega` | `http://127.0.0.1:8010/v1/systemone` | Vega за systemone-шимом |
 
 Любой другой сервер задаётся через `baseUrl` и `model`; локальному адресу ключ
-не нужен. Локальные модели получают запрос в своём реальном окне: у `laya` это
-примерно 320 токенов, поэтому состояние сжимается сильнее и компакция чаще
-откатывается к встроенному пересказу, чем отправляет обрезанный запрос.
+не нужен. `contextWindow`, `maxCallsPerBatch` и `maxConcurrentRequests` держат
+локальную модель в её окне и в той памяти, которая реально есть.
 
 Внутри OpenCode запрос идёт через `ctx.experimental.generate.decisions` и
 подписывается тем провайдером, который подключил пользователь. Вне OpenCode
 (бенч) та же модель вызывается по HTTP с ключом из
 `~/.local/share/opencode/auth.json`.
 
-### Блокировки по региону
-
-Что видно с российской сети в ноябре 2026:
-
-| Маршрут | Ответ |
-| --- | --- |
-| TypeSafe | `451 Typesafe is not available in your region` |
-| Console Jev (`opencode`) | `403 RegionError: This model is not available in your country` |
-| Go-маршрут | `400 Model jev-1.13-free isn't included in OpenCode Go` |
-
-Плагин на всех трёх падает безопасно: в журнал пишется ошибка, OpenCode пишет
-свой пересказ. Если через провайдер `opencode` Jev у вас работает, пресет по
-умолчанию уже использует этот путь. HTTP-пресеты нужны для бенча и для других
-сетей.
+Неудачный запрос не портит сессию: плагин не выставляет результат, журнал
+записывает ошибку, а OpenCode пишет свой обычный пересказ.
 
 ## Настройки
 
@@ -104,6 +89,8 @@ npm install --omit=dev
 | `contextWindow` | — | полный бюджет запроса локальной модели |
 | `maxStateTokens` | `25000` | потолок состояния, которое видит Jev |
 | `maxRequestTokens` | `30000` | потолок состояния вместе с вопросами |
+| `maxCallsPerBatch` | `0` | вызовов на запрос; 0 — все вызовы одним запросом |
+| `maxConcurrentRequests` | `0` | сколько запросов одновременно; 0 — все сразу |
 | `keepThreshold` | `0.5` | минимальная вероятность «оставить» |
 | `preserveRecentMessages` | `6` | сколько последних сообщений не трогать (первое не трогается всегда) |
 | `truncateHeadChars` | `300` | сколько символов результата оставить перед пометкой |
@@ -112,25 +99,9 @@ npm install --omit=dev
 | `enabled` | `true` | выключить плагин, не удаляя его |
 
 Переменные окружения: `FAST_JEV_TRANSPORT`, `FAST_JEV_BASE_URL`,
-`FAST_JEV_MODEL`, `FAST_JEV_API_KEY`, `FAST_JEV_PROVIDER`, `FAST_JEV_MODEL_ID`,
-`FAST_JEV_LOG`, `FAST_JEV_ENABLED`, `FAST_JEV_CHAT_MODEL`.
-
-### Локальная модель
-
-```jsonc
-{
-  "plugins": [
-    {
-      "package": "/Users/you/.config/opencode/plugins/fast-jev-compaction",
-      "options": {
-        "baseUrl": "http://127.0.0.1:8000/v1/systemone",
-        "model": "laya-typed-decisions",
-        "contextWindow": 320
-      }
-    }
-  ]
-}
-```
+`FAST_JEV_MODEL`, `FAST_JEV_API_KEY`, `FAST_JEV_CONTEXT_WINDOW`,
+`FAST_JEV_PROVIDER`, `FAST_JEV_MODEL_ID`, `FAST_JEV_LOG`, `FAST_JEV_ENABLED`,
+`FAST_JEV_CHAT_MODEL`.
 
 ## Как понять, лучше стало или хуже
 
@@ -146,7 +117,7 @@ npm install --omit=dev
 ```sh
 tsx bench/run.ts --transport stub        # проверка механики без сети
 tsx bench/run.ts --transport opencode-http-free --verbose
-tsx bench/run.ts --transport laya --limit 5
+tsx bench/run.ts --transport opencode-http-free --limit 5
 ```
 
 Метрики по важности:
@@ -228,7 +199,7 @@ vitest расходятся требования к версии vite.
 
 ## Происхождение
 
-Движок, хук для Claude Code, демо на SwiftUI и исходный README — из
+Движок и исходный README — из
 [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
-В форке добавлены плагин для OpenCode, реестр транспортов, профили локальных
-моделей и бенч. MIT.
+В форке интеграция с хостом заменена плагином для OpenCode, добавлены реестр
+транспортов, поддержка локальных моделей и бенч. MIT.

@@ -95,6 +95,7 @@ export function benchTransport(): BenchTransport {
           baseUrl: base,
           model: arg('model', 'jev-latest'),
           ...(arg('context-window', '') ? { contextWindow: Number(arg('context-window', '0')) } : {}),
+          ...(arg('calls-per-batch', '') ? { maxCallsPerBatch: Number(arg('calls-per-batch', '0')) } : {}),
         }
       : resolveTransport(requested, process.env);
   return { requested, useStub, http: toHttp(transport) };

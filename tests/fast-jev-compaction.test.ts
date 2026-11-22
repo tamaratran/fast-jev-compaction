@@ -238,10 +238,16 @@ describe('question batching', () => {
     isError: false,
     pinned: false,
   }));
-  const options = { maxRequestTokens: 30_000 };
+  const options = { maxRequestTokens: 30_000, maxCallsPerBatch: 0 };
 
   it('puts everything in one request when it fits', () => {
     expect(batchCalls(calls, 1000, options)).toHaveLength(1);
+  });
+
+  it('caps the calls per request, which is what a local engine needs', () => {
+    const batches = batchCalls(calls, 1000, { ...options, maxCallsPerBatch: 4 });
+    expect(batches.map((batch) => batch.length)).toEqual([4, 4, 2]);
+    expect(batches.flat().map((c) => c.id)).toEqual(calls.map((c) => c.id));
   });
 
   it('splits questions across requests when the state leaves little room', () => {
@@ -362,6 +368,37 @@ describe('compact', () => {
     expect(output.messages).toHaveLength(messages.length);
     expect(output.stats).toMatchObject({ resultsDropped: 3, kept: 0, callsDropped: 0, pinned: 0 });
     expect(reductionRatio(output)).toBeGreaterThan(0);
+  });
+
+  it('keeps one batch in flight when a local engine needs it', async () => {
+    let active = 0;
+    let peak = 0;
+    let requests = 0;
+    const asker: JevAsker = {
+      async ask(_state, questions) {
+        active += 1;
+        peak = Math.max(peak, active);
+        requests += 1;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return {
+          answers: Object.fromEntries(
+            Object.keys(questions).map((key) => [
+              key,
+              { type: 'noul' as const, noul: key.startsWith('call_') ? 0.9 : 0.1 },
+            ]),
+          ),
+        };
+      },
+    };
+    const output = await compact(transcript(), asker, {
+      preserveRecentMessages: 1,
+      maxCallsPerBatch: 1,
+      maxConcurrentRequests: 1,
+    });
+    expect(requests).toBe(3);
+    expect(output.stats.requests).toBe(3);
+    expect(peak).toBe(1);
   });
 
   it('keeps everything without calling Jev when no tool call is a candidate', async () => {

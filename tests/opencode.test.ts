@@ -177,7 +177,7 @@ describe('decision transports', () => {
   it('needs no key for a local server but refuses a remote one', async () => {
     let sent: Record<string, string> = {};
     const local = createAsker(
-      { kind: 'http', baseUrl: 'http://127.0.0.1:8000/v1/systemone', model: 'laya' },
+      { kind: 'http', baseUrl: 'http://127.0.0.1:8000/v1/systemone', model: 'local-model' },
       {
         fetch: (async (_url: string, init?: { headers?: Record<string, string> }) => {
           sent = init?.headers ?? {};
@@ -219,22 +219,24 @@ describe('plugin configuration', () => {
   });
 
   it('turns baseUrl into an HTTP transport with a model', () => {
-    const config = resolvePluginConfig({ baseUrl: 'http://127.0.0.1:8000/v1/systemone', model: 'laya-typed-decisions' }, {});
+    const config = resolvePluginConfig({ baseUrl: 'http://127.0.0.1:8000/v1/systemone', model: 'local-model' }, {});
     expect(config.transport).toMatchObject({
       kind: 'http',
       baseUrl: 'http://127.0.0.1:8000/v1/systemone',
-      model: 'laya-typed-decisions',
+      model: 'local-model',
     });
   });
 
   it('takes the preset from the environment and applies its limits', () => {
-    const config = resolvePluginConfig({}, { FAST_JEV_TRANSPORT: 'laya' });
-    expect(config.transport).toMatchObject({ kind: 'http', model: 'laya-typed-decisions' });
-    expect(config.maxRequestTokens).toBeLessThan(400);
+    const config = resolvePluginConfig({}, { FAST_JEV_TRANSPORT: 'openjev', FAST_JEV_CONTEXT_WINDOW: '4096' });
+    expect(config.transport).toMatchObject({ kind: 'http', model: 'openjev-1.7b' });
+    expect(config.maxRequestTokens).toBeLessThan(4_096);
+    expect(config.maxCallsPerBatch).toBe(0);
+    expect(config.maxConcurrentRequests).toBe(0);
   });
 
   it('honours explicit limits over the preset', () => {
-    const config = resolvePluginConfig({ transport: 'laya', maxStateTokens: 900 }, {});
+    const config = resolvePluginConfig({ transport: 'openjev', maxStateTokens: 900 }, {});
     expect(config.maxStateTokens).toBe(900);
   });
 

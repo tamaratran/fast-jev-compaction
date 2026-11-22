@@ -2,7 +2,7 @@
  * Askers for every transport. Inside OpenCode the provider route is preferred:
  * the host signs the call and the model is the one the Console connection
  * serves. An HTTP asker is kept for TypeSafe, a direct Console call and every
- * local `POST /v1/systemone` server (Laya, OpenJev, Vega through its shim).
+ * local `POST /v1/systemone` server.
  */
 import { JevClient } from '../client.js';
 import { parseJevResponse } from '../request.js';
