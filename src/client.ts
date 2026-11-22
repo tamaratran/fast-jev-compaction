@@ -6,8 +6,12 @@ export interface JevClientOptions {
   apiKey?: string;
   /** Defaults to `jev-latest`. */
   model?: string;
-  /** Defaults to the System One endpoint. */
+  /** Defaults to the System One endpoint. Point it at a local server or OpenCode's route. */
   baseUrl?: string;
+  /** Extra request headers, such as OpenCode's `x-opencode-session`. */
+  headers?: Record<string, string>;
+  /** Refuse a call without a key. Local systemone servers need none; defaults to true. */
+  requireKey?: boolean;
   /** Defaults to the global `fetch`. */
   fetch?: typeof fetch;
 }
@@ -17,19 +21,32 @@ export class JevClient implements JevAsker {
   private readonly apiKey: string;
   private readonly model: string | undefined;
   private readonly baseUrl: string | undefined;
+  private readonly headers: Record<string, string> | undefined;
+  private readonly requireKey: boolean;
   private readonly fetcher: typeof fetch;
 
   constructor(options: JevClientOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.TYPESAFE_API_KEY ?? '';
     this.model = options.model;
     this.baseUrl = options.baseUrl;
+    this.headers = options.headers;
+    this.requireKey = options.requireKey ?? true;
     this.fetcher = options.fetch ?? fetch;
   }
 
   async ask(state: JevState, questions: JevQuestions): Promise<JevResponse> {
-    if (!this.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
+    if (this.requireKey && !this.apiKey) {
+      throw new Error(
+        'no Jev API key is configured (TYPESAFE_API_KEY, JEV_API_KEY or the transport key)',
+      );
+    }
     const request = buildJevRequest(
-      { apiKey: this.apiKey, model: this.model, baseUrl: this.baseUrl },
+      {
+        apiKey: this.apiKey,
+        model: this.model,
+        baseUrl: this.baseUrl,
+        headers: this.headers,
+      },
       state,
       questions,
     );

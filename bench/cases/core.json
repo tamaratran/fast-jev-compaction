@@ -1,0 +1,910 @@
+[
+  {
+    "id": "hand-stale-read-error-kept",
+    "note": "An unrelated file read is stale; the failing test output is what the fix rests on",
+    "source": "hand",
+    "messages": [
+      {
+        "role": "user",
+        "text": "Fix the failing test in src/parser.test.ts. Never edit anything under src/generated.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "Reading a.ts first.",
+        "toolUses": [
+          {
+            "tool_use_id": "c1",
+            "tool": "Read",
+            "input": {
+              "file_path": "src/a.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c1",
+            "text": "export const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\nexport const a = 1;\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "a.ts is unrelated to the parser test.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c2",
+            "tool": "Bash",
+            "input": {
+              "command": "npm test"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c2",
+            "text": "FAIL src/parser.test.ts\n  parser > accepts a trailing comma\n    Expected: true\n    Received: false\n    at src/parser.test.ts:42:11",
+            "isError": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The token loop stops before the closing brace.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c3",
+            "tool": "Read",
+            "input": {
+              "file_path": "src/parser.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c3",
+            "text": "export function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\nexport function parse(tokens) {\n  return tokens;\n}\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Editing the transition in parser.ts.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c4",
+            "tool": "Edit",
+            "input": {
+              "file_path": "src/parser.ts",
+              "old_string": "advance();",
+              "new_string": "if (next !== CLOSE) advance();"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c4",
+            "text": "The file src/parser.ts has been updated."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Running the focused test.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c5",
+            "tool": "Bash",
+            "input": {
+              "command": "npx vitest run src/parser.test.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c5",
+            "text": "PASS src/parser.test.ts\n  accepts a trailing comma (4 ms)"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "Great. Now add a changelog entry for this fix.",
+        "toolUses": []
+      }
+    ],
+    "expect": {
+      "c1": {
+        "keepResult": false,
+        "source": "hand"
+      },
+      "c2": {
+        "keepResult": true,
+        "source": "hand"
+      },
+      "c3": {
+        "keepResult": true,
+        "source": "hand"
+      }
+    },
+    "probes": [
+      {
+        "text": "Expected: true",
+        "origin": "result",
+        "call": "c2",
+        "toolUseID": "c2"
+      },
+      {
+        "text": "src/parser.ts",
+        "origin": "call",
+        "call": "c3",
+        "toolUseID": "c3"
+      }
+    ]
+  },
+  {
+    "id": "hand-grep-noise-and-flag",
+    "note": "The grep result and the edited source are needed; git status and the test pass are not",
+    "source": "hand",
+    "messages": [
+      {
+        "role": "user",
+        "text": "Add a --dry-run flag to the export command. Do not change the default behaviour.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c1",
+            "tool": "Grep",
+            "input": {
+              "pattern": "--dry-run",
+              "path": "src"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c1",
+            "text": "src/export.ts:42:  if (argv.includes('--dry-run')) return;\nsrc/cli.ts:9:  // usage\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c2",
+            "tool": "Read",
+            "input": {
+              "file_path": "src/export.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c2",
+            "text": "export async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\nexport async function run(argv) {\n  // ...\n}\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Plan: read argv, return before writing in dry-run mode.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c3",
+            "tool": "Bash",
+            "input": {
+              "command": "git status --short"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c3",
+            "text": " M src/export.ts\n?? notes.md"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Implementing now.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c4",
+            "tool": "Edit",
+            "input": {
+              "file_path": "src/export.ts",
+              "old_string": "export async function run(argv) {",
+              "new_string": "export async function run(argv) {\n  if (argv.includes('--dry-run')) return;"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c4",
+            "text": "The file src/export.ts has been updated."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Running the suite.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c5",
+            "tool": "Bash",
+            "input": {
+              "command": "npm test"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c5",
+            "text": "PASS src/export.test.ts\nTests: 6 passed"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The flag is in place and the suite passes.",
+        "toolUses": []
+      },
+      {
+        "role": "user",
+        "text": "Also document the flag in the usage text.",
+        "toolUses": []
+      }
+    ],
+    "expect": {
+      "c1": {
+        "keepResult": true,
+        "source": "hand"
+      },
+      "c2": {
+        "keepResult": true,
+        "source": "hand"
+      },
+      "c3": {
+        "keepResult": false,
+        "source": "hand"
+      },
+      "c4": {
+        "keepCall": true,
+        "keepResult": false,
+        "source": "hand"
+      },
+      "c5": {
+        "keepResult": true,
+        "source": "hand"
+      }
+    },
+    "probes": [
+      {
+        "text": "--dry-run",
+        "origin": "result",
+        "call": "c1",
+        "toolUseID": "c1"
+      },
+      {
+        "text": "src/export.ts",
+        "origin": "call",
+        "call": "c2",
+        "toolUseID": "c2"
+      }
+    ]
+  },
+  {
+    "id": "hand-build-log-noise",
+    "note": "The build log holds the compile error the fix rests on; the successful rerun is disposable",
+    "source": "hand",
+    "messages": [
+      {
+        "role": "user",
+        "text": "The build is broken after the dependency bump. Fix it without downgrading.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c1",
+            "tool": "Bash",
+            "input": {
+              "command": "npm run build"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c1",
+            "text": "[build] chunk 0 compiled in 100 ms\n[build] chunk 1 compiled in 101 ms\n[build] chunk 2 compiled in 102 ms\n[build] chunk 3 compiled in 103 ms\n[build] chunk 4 compiled in 104 ms\n[build] chunk 5 compiled in 105 ms\n[build] chunk 6 compiled in 106 ms\n[build] chunk 7 compiled in 107 ms\n[build] chunk 8 compiled in 108 ms\n[build] chunk 9 compiled in 109 ms\n[build] chunk 10 compiled in 110 ms\n[build] chunk 11 compiled in 111 ms\n[build] chunk 12 compiled in 112 ms\n[build] chunk 13 compiled in 113 ms\n[build] chunk 14 compiled in 114 ms\n[build] chunk 15 compiled in 115 ms\n[build] chunk 16 compiled in 116 ms\n[build] chunk 17 compiled in 117 ms\n[build] chunk 18 compiled in 118 ms\n[build] chunk 19 compiled in 119 ms\n[build] chunk 20 compiled in 120 ms\n[build] chunk 21 compiled in 121 ms\n[build] chunk 22 compiled in 122 ms\n[build] chunk 23 compiled in 123 ms\n[build] chunk 24 compiled in 124 ms\n[build] chunk 25 compiled in 125 ms\n[build] chunk 26 compiled in 126 ms\n[build] chunk 27 compiled in 127 ms\n[build] chunk 28 compiled in 128 ms\n[build] chunk 29 compiled in 129 ms\n[build] chunk 30 compiled in 130 ms\n[build] chunk 31 compiled in 131 ms\n[build] chunk 32 compiled in 132 ms\n[build] chunk 33 compiled in 133 ms\n[build] chunk 34 compiled in 134 ms\n[build] chunk 35 compiled in 135 ms\n[build] chunk 36 compiled in 136 ms\n[build] chunk 37 compiled in 137 ms\n[build] chunk 38 compiled in 138 ms\n[build] chunk 39 compiled in 139 ms\n[build] chunk 40 compiled in 140 ms\n[build] chunk 41 compiled in 141 ms\n[build] chunk 42 compiled in 142 ms\n[build] chunk 43 compiled in 143 ms\n[build] chunk 44 compiled in 144 ms\n[build] chunk 45 compiled in 145 ms\n[build] chunk 46 compiled in 146 ms\n[build] chunk 47 compiled in 147 ms\n[build] chunk 48 compiled in 148 ms\n[build] chunk 49 compiled in 149 ms\n[build] chunk 50 compiled in 150 ms\n[build] chunk 51 compiled in 151 ms\n[build] chunk 52 compiled in 152 ms\n[build] chunk 53 compiled in 153 ms\n[build] chunk 54 compiled in 154 ms\n[build] chunk 55 compiled in 155 ms\n[build] chunk 56 compiled in 156 ms\n[build] chunk 57 compiled in 157 ms\n[build] chunk 58 compiled in 158 ms\n[build] chunk 59 compiled in 159 ms\n\nsrc/index.ts(12,7): error TS2305: Module 'left-pad' has no exported member 'pad'."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "left-pad changed its export. Checking the local copy.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c2",
+            "tool": "Read",
+            "input": {
+              "file_path": "node_modules/left-pad/index.d.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c2",
+            "text": "export declare function leftPad(input: string, length: number): string;\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The export was renamed. Updating the import.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c3",
+            "tool": "Edit",
+            "input": {
+              "file_path": "src/index.ts",
+              "old_string": "import { pad } from 'left-pad';",
+              "new_string": "import { leftPad } from 'left-pad';"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c3",
+            "text": "The file src/index.ts has been updated."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Rebuilding.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c4",
+            "tool": "Bash",
+            "input": {
+              "command": "npm run build"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c4",
+            "text": "Build succeeded in 3.2s"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The build is green again.",
+        "toolUses": []
+      },
+      {
+        "role": "user",
+        "text": "Commit this with a message that mentions the left-pad rename.",
+        "toolUses": []
+      }
+    ],
+    "expect": {
+      "c1": {
+        "keepResult": true,
+        "source": "hand"
+      },
+      "c2": {
+        "keepResult": true,
+        "source": "hand"
+      },
+      "c4": {
+        "keepResult": true,
+        "source": "hand"
+      }
+    },
+    "probes": [
+      {
+        "text": "has no exported member 'pad'",
+        "origin": "result",
+        "call": "c1",
+        "toolUseID": "c1"
+      }
+    ]
+  },
+  {
+    "id": "hand-repeated-read",
+    "note": "The old copy of a read file is stale after an edit; the newest read and the edit result matter",
+    "source": "hand",
+    "messages": [
+      {
+        "role": "user",
+        "text": "Rename formatLegacy to format in src/format.ts and update every caller.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c1",
+            "tool": "Read",
+            "input": {
+              "file_path": "src/format.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c1",
+            "text": "export function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\nexport function formatLegacy(value: string) {\n  return value.trim();\n}\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c2",
+            "tool": "Grep",
+            "input": {
+              "pattern": "formatLegacy",
+              "path": "src"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c2",
+            "text": "src/format.ts:1:export function formatLegacy\nsrc/a.ts:4:  return formatLegacy(x);\nsrc/b.ts:9:  formatLegacy(y);"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Renaming the declaration.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c3",
+            "tool": "Edit",
+            "input": {
+              "file_path": "src/format.ts",
+              "old_string": "formatLegacy",
+              "new_string": "format"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c3",
+            "text": "The file src/format.ts has been updated."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Reading the file again to confirm the new shape.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c4",
+            "tool": "Read",
+            "input": {
+              "file_path": "src/format.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c4",
+            "text": "export function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\nexport function format(value: string) {\n  return value.trim();\n}\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Now the callers: a.ts first.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c5",
+            "tool": "Read",
+            "input": {
+              "file_path": "src/a.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c5",
+            "text": "import { formatLegacy } from './format';\nexport function run(x) {\n  return formatLegacy(x);\n}\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c6",
+            "tool": "Edit",
+            "input": {
+              "file_path": "src/a.ts",
+              "old_string": "formatLegacy",
+              "new_string": "format"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c6",
+            "text": "The file src/a.ts has been updated."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "A and b are done; b.ts still needs the rename.",
+        "toolUses": []
+      },
+      {
+        "role": "user",
+        "text": "Finish b.ts as well.",
+        "toolUses": []
+      }
+    ],
+    "expect": {
+      "c1": {
+        "keepResult": false,
+        "source": "hand"
+      },
+      "c2": {
+        "keepResult": true,
+        "source": "hand"
+      },
+      "c4": {
+        "keepResult": true,
+        "source": "hand"
+      }
+    },
+    "probes": [
+      {
+        "text": "src/b.ts:9",
+        "origin": "result",
+        "call": "c2",
+        "toolUseID": "c2"
+      }
+    ]
+  },
+  {
+    "id": "hand-shell-trace",
+    "note": "The failing command and its trace are cited later; the successful rerun is a one-line fact",
+    "source": "hand",
+    "messages": [
+      {
+        "role": "user",
+        "text": "The migration fails on the users table. Find out why before changing anything.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c1",
+            "tool": "Bash",
+            "input": {
+              "command": "npm run migrate"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c1",
+            "text": "Migration 0042_users started\nError: relation \"users\" already exists\n    at Parser.parseErrorMessage (pg-protocol/dist/parser.js:287:98)\n    at run (src/db/migrate.ts:31:11)",
+            "isError": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The migration is not idempotent: it creates a table that exists.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c2",
+            "tool": "Read",
+            "input": {
+              "file_path": "src/db/migrate.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c2",
+            "text": "export async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\nexport async function run() {\n  await query('create table users (...');\n}\n"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Adding a guard.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c3",
+            "tool": "Edit",
+            "input": {
+              "file_path": "src/db/migrate.ts",
+              "old_string": "await query('create table users (...');",
+              "new_string": "await query('create table if not exists users (...');"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c3",
+            "text": "The file src/db/migrate.ts has been updated."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Running the migration again.",
+        "toolUses": []
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "toolUses": [
+          {
+            "tool_use_id": "c4",
+            "tool": "Bash",
+            "input": {
+              "command": "npm run migrate"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "",
+        "toolUses": [],
+        "toolResults": [
+          {
+            "tool_use_id": "c4",
+            "text": "Migration 0042_users applied"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "Green now.",
+        "toolUses": []
+      },
+      {
+        "role": "user",
+        "text": "Write a note explaining why the guard was needed.",
+        "toolUses": []
+      }
+    ],
+    "expect": {
+      "c1": {
+        "keepResult": true,
+        "source": "hand"
+      },
+      "c2": {
+        "keepResult": true,
+        "source": "hand"
+      },
+      "c4": {
+        "keepResult": false,
+        "source": "hand"
+      }
+    },
+    "probes": [
+      {
+        "text": "relation \"users\" already exists",
+        "origin": "result",
+        "call": "c1",
+        "toolUseID": "c1"
+      }
+    ]
+  }
+]

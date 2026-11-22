@@ -1,30 +1,43 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.2.0",
-  "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model.",
+  "version": "0.3.0",
+  "description": "Verbatim context compaction for OpenCode, decided by Jev: no summary, only tool calls and results that are no longer needed are removed.",
   "type": "module",
   "license": "MIT",
   "engines": {
     "node": ">=18"
   },
   "exports": {
-    ".": {
+    ".": "./src/opencode/index.ts",
+    "./lib": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
   },
   "files": [
     "dist",
+    "src",
     "README.md",
+    "README.ru.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit && npm run typecheck:hooks",
-    "test": "vitest run",
-    "demo": "tsx examples/demo.ts",
+    "typecheck": "tsc --noEmit && npm run typecheck:bench && npm run typecheck:hooks",
+    "typecheck:bench": "tsc -p tsconfig.bench.json",
     "typecheck:hooks": "tsc -p tsconfig.hooks.json",
+    "test": "vitest run",
+    "bench": "tsx bench/run.ts",
+    "bench:stub": "tsx bench/run.ts --transport stub",
+    "bench:e2e": "tsx bench/e2e.ts",
+    "bench:stub-server": "tsx bench/stub-server.ts",
+    "extract": "tsx bin/extract-sessions.ts",
+    "trial": "tsx bin/trial.ts",
+    "demo": "tsx examples/demo.ts",
     "validate:plugin": "claude plugin validate .claude-plugin/plugin.json"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.3.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

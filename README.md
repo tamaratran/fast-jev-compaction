@@ -1,191 +1,240 @@
-# fast-jev-compaction
+# fast-jev-compaction (OpenCode fork)
 
-Claude Code plugin that replaces the compaction summary with Jev decisions:
-every tool call and result is scored in one fast request, stale ones are
-dropped or truncated, everything kept stays verbatim. Also usable as an npm
-library.
+Fork of [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction):
+the same verbatim compaction engine, wired into OpenCode's `compaction` hook
+instead of Claude Code's, and able to ask Jev through OpenCode itself, through
+TypeSafe, or through a local Jev-compatible model.
 
-## What and why
+[Русская версия](README.ru.md)
 
-Most context compaction asks an LLM to summarize old turns. A summary is
-lossy: a file path, exact error, constraint, or command can disappear even when
-it matters later. This library never rewrites anything. It only deletes tool
-calls and tool results Jev says are no longer needed, and it asks Jev while
-showing it the whole conversation. User and assistant text stays verbatim and
-in order.
+## What it does
 
-The repository is both an npm package (`src/`) and a Claude Code plugin
-(`hooks/`, `.claude-plugin/`) that uses the package to replace Claude Code's
-built-in compaction summary with the original messages.
+OpenCode compacts a long session by replacing older turns with a model-written
+summary. A summary is lossy: a file path, an exact error, a constraint can
+disappear even when the next turn needs it.
 
-## How it works
+This plugin never rewrites anything. Every tool call and every tool result is
+scored in one Jev request; stale ones are deleted or truncated, and everything
+kept stays verbatim, in order. The hook returns the surviving messages as the
+provider replacement window (`result.native.messages`), so OpenCode replays them
+instead of a summary.
 
-1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in
-   the first message or in the newest `preserveRecentMessages` messages are
-   pinned and never touched.
-2. The **state** sent to Jev is the whole conversation so far, oldest first,
-   with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
-   Tool inputs are included, texts are included, nothing is summarized.
-3. The state is fitted into `maxStateTokens` (25k by default) in stages, each
-   applied only if the previous one was not enough: tool inputs truncated to
-   1000, then 200, then 60 characters; long texts abridged to head + tail,
-   oldest non-pinned messages first; old non-pinned messages collapsed to a
-   `[… N chars omitted …]` note; old tool calls reduced to one line each
-   (`t12 Read file_path=src/a.ts → ok 480ch`); old call-less messages left
-   out; runs of old call-only messages folded into one entry. If it still
-   does not fit, compaction throws. Tokens are estimated without a tokenizer (a
-   word per six letters, half a token per digit, ~one per other symbol),
-   calibrated to land a little above the counts Jev reports.
-4. For every non-pinned call Jev gets two `noul` questions: should the **call**
-   stay (knowing it was made, with its input, still matters), and should the
-   **result** stay verbatim (its contents are still needed and re-running the
-   tool would not do).
-5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (30k by default, under Jev's 32k request
-   limit). The same full state is resent with every request; requests run
-   concurrently and their answers are merged.
-6. Decisions per call, against `keepThreshold`:
-   - `keepResult ≥ threshold` → keep call and result;
-   - else `keepCall ≥ threshold` → keep the call, truncate the result to its
-     first `truncateHeadChars` characters plus a one-line note;
-   - else → remove the call together with its result.
-7. The message list is rebuilt: a message that loses all its content is
-   removed, untouched messages are returned as the same objects, and no result
-   is ever left without its call.
+If Jev fails, answers badly, or removes too little, the hook leaves `result`
+unset and OpenCode writes its own summary. A failed compaction never makes a
+session worse than the built-in behaviour.
 
-Jev failures, malformed answers, a missing key, or a history that cannot be
-fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
-
-## Install and usage
+## Install in OpenCode
 
 ```sh
-npm install fast-jev-compaction
-export TYPESAFE_API_KEY=...
+git clone https://github.com/Zakhvatov/fast-jev-compaction.git \
+  ~/.config/opencode/plugins/fast-jev-compaction
+cd ~/.config/opencode/plugins/fast-jev-compaction
+npm install --omit=dev
 ```
 
-```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';
+The repository root is the plugin directory. Without a `package.json` name and
+`exports`, OpenCode would look for `server.ts`/`index.ts` at the root; with them
+it loads `exports["."]`, which is [`src/opencode/index.ts`](src/opencode/index.ts).
 
-const transcript: Message[] = [
-  { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },
-  {
-    role: 'assistant',
-    text: '',
-    toolUses: [{ tool_use_id: 'toolu_1', tool: 'Read', input: { file_path: 'src/a.ts' } }],
-  },
-  { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'toolu_1', text: '…file…' }] },
-  // …
-];
+Add it to `~/.config/opencode/opencode.json` (or a project's `opencode.json`):
 
-const result = await compactMessages(transcript, { preserveRecentMessages: 4 });
-console.log(result.messages, result.decisions, result.stats);
-if (reductionRatio(result) < 0.25) {
-  // not worth it: keep the original transcript, or summarize instead
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "/Users/you/.config/opencode/plugins/fast-jev-compaction",
+      "options": { "transport": "opencode-free" }
+    }
+  ]
 }
 ```
 
-`Message` is a subset of Claude Code's `SessionMessage`, so a session transcript
-can be passed in as is.
+Restart OpenCode. A `.opencode/plugins/fast-jev-compaction/` directory next to a
+project works too and needs no `plugins` entry.
 
-To bring your own transport, implement `JevAsker` (one `ask(state, questions)`
-method) and call `compact(messages, asker, options)`; `buildJevRequest` and
-`parseJevResponse` give you the HTTP request body and response validation.
-The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
-`decideCall`, `applyDecisions`) are exported too.
+## Which Jev
 
-`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
-put it in a source file.
+`jev-1.13-free` and `jev-1.13` are served by an OpenCode Console connection
+(provider `opencode`), not by the Go plan. The free tier costs nothing; the paid
+tier is billed in dollars per call.
+
+| Preset | Transport | Needs |
+| --- | --- | --- |
+| `opencode-free` (default) | provider `opencode`, model `jev-1.13-free` | a connected `opencode` provider |
+| `opencode-paid` | provider `opencode`, model `jev-1.13` | the same, billed per call |
+| `typesafe` | HTTP, `api.typesafe.ai/v1/systemone`, `jev-latest` | `TYPESAFE_API_KEY` |
+| `opencode-http-free` | HTTP, `opencode.ai/inference/systemone`, `jev-1.13-free` | an OpenCode Console key in `auth.json` |
+| `opencode-go-free` | HTTP, `opencode.ai/inference/go/systemone` | key plus `x-opencode-session`, and the model on the Go plan |
+| `laya` | `http://127.0.0.1:8000/v1/systemone`, `laya-typed-decisions` | `pip install "laya[serve]"`, `LAYA_PRELOAD=1 laya-serve` |
+| `openjev` | `http://127.0.0.1:8009/v1/systemone`, `openjev-1.7b` | a running OpenJev server |
+| `vega` | `http://127.0.0.1:8010/v1/systemone`, `vega-0.8b` | Vega behind the systemone shim |
+
+Any other server is configured with `baseUrl` and `model`; a local address needs
+no key. Local models are asked within their real window: `laya` gets a ~320-token
+request budget, so the state is fitted much harder and compaction often falls
+back rather than sending a truncated request.
+
+Inside OpenCode the default goes through `ctx.experimental.generate.decisions`,
+which signs the request with the provider the user connected. Outside OpenCode
+(the bench) the same model is reached over HTTP with a key from
+`~/.local/share/opencode/auth.json`.
+
+### Region blocks
+
+Observed on a Russian network, November 2026:
+
+| Route | Answer |
+| --- | --- |
+| TypeSafe | `451 Typesafe is not available in your region` |
+| Console Jev (`opencode`) | `403 RegionError: This model is not available in your country` |
+| Go route | `400 Model jev-1.13-free isn't included in OpenCode Go` |
+
+The plugin fails closed on all three: the trial log records the error and
+OpenCode writes its summary. If Jev works for you through the `opencode`
+provider, the default preset already uses that path; the HTTP presets are for
+the bench and for other networks.
 
 ## Options
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
-| `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
-| `fetch` | native `fetch` | Injectable fetch implementation for tests |
-| `goal` | last 3 user prompts | Ongoing task description included in the state |
-| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
-| `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
-| `maxStateTokens` | `25000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
-| `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `transport` / `preset` | `opencode-free` | preset name, or a URL (`http://…/v1/systemone`) |
+| `baseUrl` | — | select the HTTP transport explicitly |
+| `model` | preset's | model name for the HTTP transport |
+| `apiKey` | env or `auth.json` | key for the HTTP transport |
+| `providerID`, `modelID` | `opencode`, `jev-1.13-free` | select the provider transport explicitly |
+| `contextWindow` | — | total request budget of a local model |
+| `maxStateTokens` | `25000` (transport limit) | estimated ceiling for the state Jev sees |
+| `maxRequestTokens` | `30000` (transport limit) | estimated ceiling for state plus questions |
+| `keepThreshold` | `0.5` | minimum keep probability for a call or result |
+| `preserveRecentMessages` | `6` | newest messages never touched (the first is always kept) |
+| `truncateHeadChars` | `300` | characters of a dropped result left before its note |
+| `minReductionRatio` | `0.25` | below this share the built-in summary is kept |
+| `logPath` | `~/.local/share/opencode/fast-jev-compaction/trial.jsonl` | trial log |
+| `enabled` | `true` | turn the plugin off without removing it |
 
-`result.stats` reports message and character counts before and after, the
-per-reason decision counts, the state size in estimated tokens, which fitting
-stage was needed, and the number of requests.
+Environment overrides: `FAST_JEV_TRANSPORT`, `FAST_JEV_BASE_URL`,
+`FAST_JEV_MODEL`, `FAST_JEV_API_KEY`, `FAST_JEV_PROVIDER`, `FAST_JEV_MODEL_ID`,
+`FAST_JEV_LOG`, `FAST_JEV_ENABLED`, `FAST_JEV_CHAT_MODEL`.
 
-## Limitations
+### Local model example
 
-- Only tool calls and results are candidates; text messages are never removed
-  or shortened in the output (they are only abridged in the state Jev sees).
-- Token sizes are estimates from character counts, not a tokenizer.
-- Calibration is at the request level; a probability is not a proof that a
-  result is safe to delete. The assistant can always re-run the tool.
-- The full state is repeated with every request, so a history near the state
-  ceiling costs one request per handful of questions.
-
-## Claude Code plugin
-
-The repository root is a Claude Code function-hook plugin: `hooks/fast-jev.ts`
-is a thin adapter that feeds `session.compact` transcripts through `src/` and
-falls back to Claude Code's built-in summary on errors or insufficient
-reduction. See [`hooks/README.md`](hooks/README.md) for configuration and the
-Claude Code 2.1.274 type reference.
-
-### Install in Claude Code
-
-Function hooks are an early-access Claude Code feature (2.1.274+), so the
-opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.json`:
-
-```json
-{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1", "TYPESAFE_API_KEY": "<your key>" } }
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "/Users/you/.config/opencode/plugins/fast-jev-compaction",
+      "options": {
+        "baseUrl": "http://127.0.0.1:8000/v1/systemone",
+        "model": "laya-typed-decisions",
+        "contextWindow": 320
+      }
+    }
+  ]
+}
 ```
 
-Then add this repository as a plugin marketplace and install the plugin,
-either from the shell or as slash commands inside a session:
+## Measuring "better or worse"
+
+Three layers, because they answer different questions.
+
+### 1. Hand-labelled cases
+
+[`bench/cases/core.json`](bench/cases/core.json) holds transcripts where the
+right decision is known: a stale read that should go, the failing test output
+that must stay, a constraint in user text (never a candidate), a build log that
+holds the compile error, a repeated read whose older copy is stale.
 
 ```sh
-claude plugin marketplace add tamaratran/fast-jev-compaction
-claude plugin install fast-jev-compaction@fast-jev-compaction
+tsx bench/run.ts --transport stub        # offline plumbing check
+tsx bench/run.ts --transport opencode-http-free --verbose
+tsx bench/run.ts --transport laya --limit 5
 ```
 
-The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
-…); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
-Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
-auto-compaction) goes through Jev: the toast reads
-`fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
-replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
-could not remove enough (short sessions, or when it fails).
+Metrics, in order of importance:
 
-To run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .`
-from the repository root. No publishing step is required; the marketplace is
-just the repo's `.claude-plugin/marketplace.json`.
+- **dangerous** — a result the next turn needed was dropped or truncated;
+- **lost probes** — a literal the next turn used is no longer in the window;
+- **reduction** — share of characters removed; without it there is no point.
+
+### 2. Real sessions
+
+```sh
+tsx bin/extract-sessions.ts --limit 10
+```
+
+Reads `~/.local/share/opencode/opencode.db`, finds the last assistant turn of a
+session, and treats everything that turn referenced (a file it opened, a command
+it ran, an error line it quoted) as a probe. If a probe lived in a tool result of
+the history, that result was needed later — a drop is a dangerous decision. The
+fixtures are ordinary `bench/run.ts` cases.
+
+### 3. End to end
+
+```sh
+tsx bench/e2e.ts --transport opencode-http-free --baseline --ask
+```
+
+For every fixture it compacts the history, then checks:
+
+- whether each probe is still in the window;
+- whether a model-written summary of the same history keeps it (`--baseline`, one
+  chat call per fixture);
+- whether a chat model can still quote it from the window, and from the summary
+  (`--ask`, one call per probe).
+
+The chat model defaults to `deepseek-v4.1-flash` through the Go route; override
+with `FAST_JEV_CHAT_MODEL` or `--chat-model`.
+
+### 4. Trial log
+
+Each compaction appends one JSON line to `logPath`: backend, counts, decisions,
+reduction, fitting stage, latency, and the error text when one happened. No
+transcript content is written.
+
+```sh
+tsx bin/trial.ts
+tsx bin/trial.ts --since 2026-11-20
+```
+
+## How the decisions work
+
+1. `tool_use` and `tool_result` are paired by id. Calls in the first message and
+   in the newest `preserveRecentMessages` messages are pinned.
+2. The state is the whole conversation, oldest first, with results replaced by a
+   short note (`ok, 4213 chars (omitted)`), fitted into `maxStateTokens` in
+   stages; if it still does not fit, compaction throws and the hook falls back.
+3. Two `noul` questions per call: should the call stay, should the result stay
+   verbatim. Requests are batched under `maxRequestTokens`, run concurrently.
+4. `keepResult ≥ threshold` → keep; else `keepCall ≥ threshold` → keep the call
+   and truncate the result; else drop both. Text messages are never removed.
+
+The engine is still usable as a library: `import { compact } from
+'fast-jev-compaction/lib'` after `npm run build`.
 
 ## Development
 
 ```sh
-npm install
-npm run typecheck        # library + hook
-npm test
+npm run typecheck     # library, plugin, bench, hooks
+npm test              # unit tests, fake transport, no network
 npm run build
-npm run validate:plugin  # claude plugin validate
-TYPESAFE_API_KEY="$(cat ~/.typesafe_key)" npm run demo
+npm run bench:stub    # offline bench, deterministic
+npm run bench:stub-server   # 127.0.0.1:8787/v1/systemone for a manual plugin check
 ```
 
-The unit tests use a fake Jev and never contact TypeSafe. The demo is the live
-network check.
+Two OpenCode-specific test files matter:
 
-## Animated demo (macOS)
+- `tests/opencode.test.ts` — message mapping, native window rebuilding, provider
+  question translation, fail-closed answers, the hook's fallback paths;
+- the same file drives the hook with a fake event, so the compaction contract is
+  tested without OpenCode.
 
-`demo/JevDemo` is a small native SwiftUI app that plays a scripted, dramatized
-version of the compaction flow inside a Claude Code-style terminal: the tool
-calls of a canned transcript are scored, results and calls Jev lets go turn red
-and collapse away, and the rest stays verbatim. It never calls the API; it
-exists to be screen recorded.
+`npm install` uses `.npmrc` with `legacy-peer-deps` because `@opencode/plugin`
+and the vitest toolchain disagree about a vite peer.
 
-```sh
-demo/JevDemo/build.sh   # builds demo/JevDemo/build/JevDemo.app and launches it
-```
+## Upstream
 
-Press space in the app to replay from the start.
+The engine, the Claude Code hook, the SwiftUI demo and the original README come
+from [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
+This fork adds the OpenCode plugin, the transport registry, the local-model
+profiles and the bench. MIT.

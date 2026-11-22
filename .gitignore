@@ -2,3 +2,8 @@ node_modules
 dist
 .env
 demo/JevDemo/build
+trial.jsonl
+trial-*.jsonl
+bench/results/*-local-*.json
+bench/fixtures/
+bench/results/
